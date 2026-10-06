@@ -1,7 +1,8 @@
 -- Party Dash: replicated round state. FROZEN CONTRACT.
 -- A single Configuration instance, ReplicatedStorage.GameState, created at runtime by the server.
 -- Only Core (P1) writes it (except ScoresJson, which score-kind minigames update via ctx.addScore).
--- Everyone else reads attributes. See docs/ARCHITECTURE.md for the full attribute table.
+-- Everyone else reads attributes. See docs/ARCHITECTURE.md for the full attribute table (v2 adds QueuedCount,
+-- LobbyHold, VoteOptions, VoteCounts, PhaseStart, SuddenDeath).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")

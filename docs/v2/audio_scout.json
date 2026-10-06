@@ -1,0 +1,645 @@
+{
+  "method": "SEARCH: I used Studio search_asset (creator_store) plus the public Creator Store API (apis.roblox.com/toolbox-service/v2/assets:search?searchCategoryType=Audio&query=..&userId=..), filtered to licensed or Roblox-owned uploaders. Creator userIds: Roblox=1, ProSoundEffects=7462895450, APMOfficial=7462718749, DistrokidOfficial=7135127272. I picked a user-uploaded Creator Store sound only where those uploaders had nothing cartoony. Those carry takedown risk and their notes say so.\n\nVERIFY: Studio \"Place1\" stayed in Edit mode the whole time. For every id I ran execute_luau: Sound in SoundService with SoundId rbxassetid://<id>, ContentProvider:PreloadAsync, then waited up to 5 s for IsLoaded and TimeLength > 0, then destroyed it. All 120+ candidates passed, including every primary and backup here. The check does reject ids that don't load: two other ids (130776150, 2789975069) returned IsLoaded=false. I took creator and name from MarketplaceService:GetProductInfo, and every user upload reported IsPublicDomain=true.\n\nLOUDNESS: I wired each id through AudioPlayer -> Wire -> AudioAnalyzer (no output device, so nothing played aloud) and recorded PeakLevel, RmsLevel and the time to the first sound. Suggested volumes come from these numbers. They are the per-sound Sound.Volume, applied on top of the SoundGroup volumes in src/shared/Audio.lua:29 (Music 0.5, SFX 0.8, UI 0.7). For BombFuse, LaserHum and BombTick I also checked RMS across the clip to confirm they loop evenly. Everything I created went into a temporary folder named AudioScoutTmp and was destroyed; a final scan found 0 leftovers. A Folder \"LaserTracerSfx\" was already in SoundService and is not mine.\n\nKEY NAMING: each key has a primary entry (key = \"X\") and a backup entry (key = \"X.backup\").\n\nTo install: write assets/sounds.json (it does not exist yet) as {\"UiClick\":{\"id\":\"rbxassetid://17208204604\",\"volume\":0.7},...} and run tools/gen_assets_lua.py. That fills Assets.Sounds, which is empty right now at src/shared/Assets.lua:77.\n\nFINDINGS FOR THE LEAD:\n(1) src/shared/Audio.lua is not called anywhere yet. The game currently builds every sound from 6 sound files built into the Roblox client (action_jump.mp3, action_jump_land.mp3, action_swim.mp3, action_falling, impact_explosion_03.mp3, volume_slider.ogg), pitch-shifted. That happens in src/client/UI/Sfx.lua:8-12, src/client/Shop/Sfx.lua:8-14, src/client/Solo/Sfx.lua:8-12, src/client/Minigames/LaserTracer/Sounds.lua:11-15, src/client/Minigames/Dodgeball/Effects.lua:25-30, src/client/Minigames/Dodgeball/Cannons.lua:99, src/client/Minigames/HoleInTheWall/Fx.lua:97-99, src/client/Minigames/HoleInTheWall/WallView.lua:315, src/client/Minigames/Spin/init.client.lua:79-81, src/client/Minigames/KingOfTheHill/Input.lua:74, src/server/Economy/Visuals.lua:22-23 and src/server/Minigames/KingOfTheHill/BatTool.lua:29-31. All of these should switch to Audio.ui / Audio.play / Audio.at with the keys below.\n(2) src/shared/Movement/Assets.lua:22-24 already uses 15675024286 (Dash), 9118771226 (Slide) and 15675059323 (Ready). All three verified, and I reuse them below for Dash, Slide.backup and UiClick.backup.\n(3) Audio.lua has no way to loop a sound at a position. Audio.at, playOnce at lines 82-108, always plays once and is destroyed. BombFuse, LaserHum and a looping BombTick need a new function, e.g. Audio.loopAt(key, part) -> Sound, with Looped=true, cleaned up by the caller.\n(4) Roblox's default character sounds (the RbxCharacterSounds script) already play jump and land sounds. Either turn those off or skip the Jump and Land keys, otherwise you get double sounds.\n(5) The client's built-in rbxasset://sounds/impact_water.mp3 also loads (2.38 s) and works as a no-risk Splash fallback.",
+  "sounds": [
+    {
+      "key": "MusicLobby1",
+      "assetId": "78804894697787",
+      "verifiedLoads": true,
+      "creator": "DistrokidOfficial",
+      "name": "Ukulele Sunshine (Happy Vlog Music)",
+      "seconds": 175,
+      "volume": 0.6,
+      "notes": "PRIMARY. Soft happy ukulele, Roblox-licensed DistroKid track. Steady level: average loudness (RMS) 0.128, peak 0.66, low variation, so it should not be annoying on repeat. Looped=true via Audio.setMusic. Alternates: 1839578771 APM 'Charming View Ukulele' 64s; 76820811749076 'Happy Ukulele Kids' 117.9s (louder, use vol 0.35)."
+    },
+    {
+      "key": "MusicLobby1.backup",
+      "assetId": "109740999803693",
+      "verifiedLoads": true,
+      "creator": "DistrokidOfficial",
+      "name": "Happy Mood Ukulele",
+      "seconds": 190,
+      "volume": 0.6,
+      "notes": "BACKUP. Ukulele, 190 s. More dynamic (RMS variation 0.78), so it has quieter breaks."
+    },
+    {
+      "key": "MusicLobby2",
+      "assetId": "116315512540304",
+      "verifiedLoads": true,
+      "creator": "DistrokidOfficial",
+      "name": "Game-Style Calm Kalimba for Studying",
+      "seconds": 126,
+      "volume": 0.8,
+      "notes": "PRIMARY. Calm, game-style kalimba, cozy and kid-friendly. Quiet master (average RMS 0.091), hence the higher volume. Alternates: 77908674260771 '9PM Cozy Chill \u2014 Warm Lofi Vibes' 120s (vol 0.6); 15675069601 Roblox-owned 'Roblox_UI_Loop_Calm_Music' 95.5s, made to loop, very quiet (RMS 0.041), use vol 1.8."
+    },
+    {
+      "key": "MusicLobby2.backup",
+      "assetId": "112489000993233",
+      "verifiedLoads": true,
+      "creator": "DistrokidOfficial",
+      "name": "lofi hip hop chill \u2013 smooth beats & cozy room",
+      "seconds": 139.3,
+      "volume": 0.55,
+      "notes": "BACKUP. Cozy lo-fi, steady level (RMS 0.147, variation 0.36)."
+    },
+    {
+      "key": "MusicRound",
+      "assetId": "80191016555521",
+      "verifiedLoads": true,
+      "creator": "DistrokidOfficial",
+      "name": "playful bouncy funny upbeat kids pets",
+      "seconds": 76.4,
+      "volume": 0.7,
+      "notes": "PRIMARY. Light, bouncy, playful and not aggressive. 76 s loops fine for rounds of about 60-90 s. Alternates: 17422163655 Roblox-owned 'Generic - Cloud Blitz' 138.4s (vol 0.5); 101355253700360 'Team Battles' 184.4s (vol 0.6)."
+    },
+    {
+      "key": "MusicRound.backup",
+      "assetId": "1837478855",
+      "verifiedLoads": true,
+      "creator": "APMOfficial",
+      "name": "Outdoor Fun",
+      "seconds": 127.1,
+      "volume": 0.8,
+      "notes": "BACKUP. APM library track. The most even level of all candidates (RMS variation 0.22), quiet master."
+    },
+    {
+      "key": "UiClick",
+      "assetId": "17208204604",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox GUI - Bubble",
+      "seconds": 0.55,
+      "volume": 0.7,
+      "notes": "PRIMARY. Roblox-owned soft bubble pop, peak 0.24, starts instantly. Use for every button (brief #25)."
+    },
+    {
+      "key": "UiClick.backup",
+      "assetId": "15675059323",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox_UI_Bright_Click",
+      "seconds": 0.37,
+      "volume": 0.45,
+      "notes": "BACKUP. Roblox-owned bright click, peak 0.51. Already used as Movement 'Ready' in src/shared/Movement/Assets.lua:24."
+    },
+    {
+      "key": "UiHover",
+      "assetId": "17208339919",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox GUI - Hover 01",
+      "seconds": 0.1,
+      "volume": 0.4,
+      "notes": "PRIMARY. Roblox-owned, 0.1 s, very subtle tick (peak 0.12). Alternates 17208343514 and 17208348006 (Hover 02 and 03) can be rotated so repeats sound less mechanical."
+    },
+    {
+      "key": "UiHover.backup",
+      "assetId": "10066931761",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "RBLX UI Hover 01 (SFX)",
+      "seconds": 0.2,
+      "volume": 0.25,
+      "notes": "BACKUP. Roblox-owned, peak 0.23."
+    },
+    {
+      "key": "UiOpen",
+      "assetId": "17208405682",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox GUI - Swipe",
+      "seconds": 0.56,
+      "volume": 0.8,
+      "notes": "PRIMARY. Roblox-owned soft swipe for opening a panel, peak 0.22."
+    },
+    {
+      "key": "UiOpen.backup",
+      "assetId": "15675046931",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox_UI_Sweep",
+      "seconds": 0.61,
+      "volume": 0.4,
+      "notes": "BACKUP. Roblox-owned sweep, peak 0.50. Alternate 17208408337 'Roblox GUI - Tab' 0.59s (vol 0.6)."
+    },
+    {
+      "key": "UiError",
+      "assetId": "17208353912",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox GUI - Negative",
+      "seconds": 0.38,
+      "volume": 0.6,
+      "notes": "PRIMARY. Roblox-owned short negative buzz/blip, peak 0.38."
+    },
+    {
+      "key": "UiError.backup",
+      "assetId": "15675075163",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox_UI_Delete",
+      "seconds": 0.61,
+      "volume": 0.45,
+      "notes": "BACKUP. Roblox-owned, peak 0.50."
+    },
+    {
+      "key": "Purchase",
+      "assetId": "17208380755",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox GUI - Purchase",
+      "seconds": 0.87,
+      "volume": 0.7,
+      "notes": "PRIMARY. Roblox-owned purchase confirmation, peak 0.42. Alternate: ProSoundEffects 9113728049 'Cash Register 2 (SFX)' 1.72s, a real register drawer (vol 0.5)."
+    },
+    {
+      "key": "Purchase.backup",
+      "assetId": "76200271553561",
+      "verifiedLoads": true,
+      "creator": "Zelgraz",
+      "name": "Cha Ching by Zelgraz",
+      "seconds": 1.38,
+      "volume": 0.55,
+      "notes": "BACKUP. User-uploaded public 'cha-ching'. Peak 0.49, sound starts after about 0.1 s. User uploads carry takedown risk."
+    },
+    {
+      "key": "CoinCollect",
+      "assetId": "17208319162",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox GUI - Pickup",
+      "seconds": 0.9,
+      "volume": 0.7,
+      "notes": "PRIMARY. Roblox-owned pickup chime, peak 0.32, starts instantly. For coin bursts, play with pitch 1.0-1.2."
+    },
+    {
+      "key": "CoinCollect.backup",
+      "assetId": "1169806635",
+      "verifiedLoads": true,
+      "creator": "Everyedit",
+      "name": "Coin Collect 2 - SFX",
+      "seconds": 1.08,
+      "volume": 0.4,
+      "notes": "BACKUP. Classic coin ding from Flood Escape. The description says free to use with no credit needed, but also names the original source as 'The Sandbox Evolution', so it is third-party audio. Peak 0.63."
+    },
+    {
+      "key": "LevelUp",
+      "assetId": "89481514209130",
+      "verifiedLoads": true,
+      "creator": "EasyPlay Creations",
+      "name": "Level Up",
+      "seconds": 1.83,
+      "volume": 0.55,
+      "notes": "PRIMARY. Made as a level-up sound; the description calls it 'triumphant' and 'rising'. Peak 0.55. User-uploaded but public."
+    },
+    {
+      "key": "LevelUp.backup",
+      "assetId": "15675043410",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox_UI_Tonal_Stinger",
+      "seconds": 1.47,
+      "volume": 0.55,
+      "notes": "BACKUP. Roblox-owned tonal stinger, peak 0.51. Alternate: APM 9045808250 'High Five Happy (sting)' 3.45s (I used it for Win)."
+    },
+    {
+      "key": "ChestOpen",
+      "assetId": "9015096840",
+      "verifiedLoads": true,
+      "creator": "thienbao2109",
+      "name": "Golden chest open",
+      "seconds": 2.32,
+      "volume": 0.35,
+      "notes": "PRIMARY. Game-style golden chest open, starts instantly, loud (peak 1.0), hence the low volume. User-uploaded. For a reward reveal, follow it with WheelWin or LevelUp."
+    },
+    {
+      "key": "ChestOpen.backup",
+      "assetId": "1839865408",
+      "verifiedLoads": true,
+      "creator": "APMOfficial",
+      "name": "Fun Effect 1",
+      "seconds": 4,
+      "volume": 0.55,
+      "notes": "BACKUP. APM 'Rising bubble' cartoon effect from a pre-school kids library, starts after about 0.2 s. Alternate: ProSoundEffects 9120873624 'Wooden Chest Open Close Cedar Box 5' (realistic, but silent for the first 0.57 s)."
+    },
+    {
+      "key": "WheelTick",
+      "assetId": "16480550203",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Audio/Roblox_Pinball_Tiny_Button_Press_03",
+      "seconds": 0.18,
+      "volume": 0.35,
+      "notes": "PRIMARY. Roblox-owned tiny click, 0.18 s, fine to fire once per wheel segment. Raise pitch slightly as the wheel slows."
+    },
+    {
+      "key": "WheelTick.backup",
+      "assetId": "12221976",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "clickfast.wav",
+      "seconds": 0.04,
+      "volume": 0.25,
+      "notes": "BACKUP. Roblox-owned classic 0.04 s click, peak 0.9."
+    },
+    {
+      "key": "WheelWin",
+      "assetId": "1846251729",
+      "verifiedLoads": true,
+      "creator": "APMOfficial",
+      "name": "Fortune Fun Logo",
+      "seconds": 3.11,
+      "volume": 0.45,
+      "notes": "PRIMARY. APM showbiz 'fortune' logo sting, 3 s, fits a prize win."
+    },
+    {
+      "key": "WheelWin.backup",
+      "assetId": "1841976890",
+      "verifiedLoads": true,
+      "creator": "APMOfficial",
+      "name": "Balloon Cartoon (sting)",
+      "seconds": 6.14,
+      "volume": 0.4,
+      "notes": "BACKUP. APM cartoon sting, 6 s. Alternate: Roblox-owned 16480577565 'Pinball 8Bit Riser 04' 2.9s (vol 0.4)."
+    },
+    {
+      "key": "Countdown",
+      "assetId": "12221990",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "electronicpingshort.wav",
+      "seconds": 0.46,
+      "volume": 0.8,
+      "notes": "PRIMARY. Roblox-owned short beep for 3-2-1. Play it at pitch 1.0 for 3-2-1 and use Go on zero."
+    },
+    {
+      "key": "Countdown.backup",
+      "assetId": "16480580213",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Audio/Roblox_Pinball_8Bit_Blip_01",
+      "seconds": 0.69,
+      "volume": 0.45,
+      "notes": "BACKUP. Roblox-owned 8-bit blip, peak 0.63."
+    },
+    {
+      "key": "Go",
+      "assetId": "9117261163",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Pealess Whistle Referee Fox 40 4 (SFX)",
+      "seconds": 0.62,
+      "volume": 0.55,
+      "notes": "PRIMARY. Short double referee-whistle burst, starts instantly. Alternate: air horn 9113072516 (starts 0.4 s late, not recommended)."
+    },
+    {
+      "key": "Go.backup",
+      "assetId": "9118113825",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Referee Whistle 2 (SFX)",
+      "seconds": 1.85,
+      "volume": 0.55,
+      "notes": "BACKUP. Single referee-whistle blast. Alternate: Roblox-owned 15675062723 'Roblox_UI_Whistle_Low' 0.33s."
+    },
+    {
+      "key": "Win",
+      "assetId": "9045808250",
+      "verifiedLoads": true,
+      "creator": "APMOfficial",
+      "name": "High Five Happy (sting)",
+      "seconds": 3.45,
+      "volume": 0.4,
+      "notes": "PRIMARY. APM 'happy, positive sting with a sunny, cheerful confidence', 3.5 s. Loud (peak 0.95). Alternate: Roblox-owned classic 12222253 'victory.wav' 1.21s (vol 0.6)."
+    },
+    {
+      "key": "Win.backup",
+      "assetId": "1840091947",
+      "verifiedLoads": true,
+      "creator": "APMOfficial",
+      "name": "Take the Win (sting)",
+      "seconds": 6.85,
+      "volume": 0.4,
+      "notes": "BACKUP. APM 'upbeat world-embracing sting featuring exultant strings, electric guitars and splashy drums'. Longer, best for the end-of-match podium."
+    },
+    {
+      "key": "Eliminated",
+      "assetId": "79348298352567",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Official OOF Sound Effect",
+      "seconds": 0.33,
+      "volume": 0.5,
+      "notes": "PRIMARY. Roblox-owned cartoony 'OOF', the most-liked of all candidates (576 up / 24 down). Iconic for kids."
+    },
+    {
+      "key": "Eliminated.backup",
+      "assetId": "87193628501201",
+      "verifiedLoads": true,
+      "creator": "temasbo2008f",
+      "name": "sad_trombone_slump_02",
+      "seconds": 1.96,
+      "volume": 0.5,
+      "notes": "BACKUP. Short sad-trombone slump, about 2 s. User-uploaded."
+    },
+    {
+      "key": "Hit",
+      "assetId": "3765689841",
+      "verifiedLoads": true,
+      "creator": "Phantomazing",
+      "name": "Cartoon Bonk",
+      "seconds": 0.73,
+      "volume": 0.5,
+      "notes": "PRIMARY. Cartoon bonk for the bat or tag hit (brief #25). Peak 0.70. User-uploaded. Alternates: 132937320140224 'cartoon-bonk' 1.23s (vol 0.5); 121281067238166 'Loud Cartoon Bonk' (peak 1.0, vol 0.25)."
+    },
+    {
+      "key": "Hit.backup",
+      "assetId": "9117969990",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Punch Kit Beefy Hit 6 (SFX)",
+      "seconds": 0.57,
+      "volume": 0.35,
+      "notes": "BACKUP. Licensed 'whappy chin sock' punch, peak 1.0. Playing it at pitch about 1.3 sounds more cartoony."
+    },
+    {
+      "key": "BatSwing",
+      "assetId": "9113305619",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Baseball Bat Swing 5 (SFX)",
+      "seconds": 0.69,
+      "volume": 0.45,
+      "notes": "PRIMARY. Real baseball-bat swish, peak 0.74."
+    },
+    {
+      "key": "BatSwing.backup",
+      "assetId": "9113305311",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Baseball Bat Swing 3 (SFX)",
+      "seconds": 0.47,
+      "volume": 0.7,
+      "notes": "BACKUP. Shorter, softer swish (peak 0.43)."
+    },
+    {
+      "key": "Dash",
+      "assetId": "15675024286",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox_UI_Whoosh_01",
+      "seconds": 0.85,
+      "volume": 0.45,
+      "notes": "PRIMARY. Roblox-owned whoosh. Already the Dash sound in src/shared/Movement/Assets.lua:22; keep it for consistency."
+    },
+    {
+      "key": "Dash.backup",
+      "assetId": "15675028888",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Roblox_UI_Whoosh_02",
+      "seconds": 0.49,
+      "volume": 0.5,
+      "notes": "BACKUP. Shorter Roblox-owned whoosh. Alternate: Roblox-owned 12222200 'swoosh.wav' 0.2s (vol 0.8)."
+    },
+    {
+      "key": "Slide",
+      "assetId": "125793872900507",
+      "verifiedLoads": true,
+      "creator": "Antonnnniioo",
+      "name": "Tackle:Slide",
+      "seconds": 1.14,
+      "volume": 0.8,
+      "notes": "PRIMARY. Football-style tackle slide, which matches the owner's 'like in football' slide request. Starts instantly, peak 0.32. User-uploaded."
+    },
+    {
+      "key": "Slide.backup",
+      "assetId": "9118771226",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Sand Slide 7 (SFX)",
+      "seconds": 1.21,
+      "volume": 0.6,
+      "notes": "BACKUP. Already the Slide sound in src/shared/Movement/Assets.lua:23. Alternate: ProSoundEffects 9119316983 'Snow Scrape Multiple Short Slides Crispy 2' 0.49s (vol 0.7)."
+    },
+    {
+      "key": "Jump",
+      "assetId": "9113863523",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Comic Tube Bounce 3 (SFX)",
+      "seconds": 0.48,
+      "volume": 0.4,
+      "notes": "PRIMARY. Soft comic 'tube bounce' boing, starts instantly. Roblox's default character jump sound also plays, so mute it or skip this key. Alternate: 148880539 'Cartoon sound jump' 0.26s (vol 0.35)."
+    },
+    {
+      "key": "Jump.backup",
+      "assetId": "12222124",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Short spring sound.wav",
+      "seconds": 0.62,
+      "volume": 0.35,
+      "notes": "BACKUP. Roblox-owned spring boing. Starts about 0.12 s late."
+    },
+    {
+      "key": "Land",
+      "assetId": "9113480917",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Body Fall Thud 1 (SFX)",
+      "seconds": 0.38,
+      "volume": 0.35,
+      "notes": "PRIMARY. Short thud, starts about 0.13 s late. Roblox's default character land sound also plays. Only use this for big landings, e.g. falls over 20 studs."
+    },
+    {
+      "key": "Land.backup",
+      "assetId": "9120880810",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Wood Grab Muted Thuds 24 (SFX)",
+      "seconds": 0.88,
+      "volume": 0.9,
+      "notes": "BACKUP. Very soft muted thud (peak 0.15)."
+    },
+    {
+      "key": "BombTick",
+      "assetId": "344101086",
+      "verifiedLoads": true,
+      "creator": "Irreflexive",
+      "name": "Clock Tick (1 Second Long, Loopable)",
+      "seconds": 1.02,
+      "volume": 0.45,
+      "notes": "PRIMARY. One tick at t=0 and silence for the rest of the second. Checked: it loops as exactly one tick per second for the 10 s bomb. Set Looped=true and raise PlaybackSpeed (1.0 up to about 2.0) in the last 3 s for urgency. User-uploaded."
+    },
+    {
+      "key": "BombTick.backup",
+      "assetId": "4940109913",
+      "verifiedLoads": true,
+      "creator": "OverpricedTomatoes",
+      "name": "Clock Ticking",
+      "seconds": 1.94,
+      "volume": 0.6,
+      "notes": "BACKUP. Tick-tock loop: two ticks at 0 s and about 1 s. Checked."
+    },
+    {
+      "key": "BombFuse",
+      "assetId": "117020818319054",
+      "verifiedLoads": true,
+      "creator": "Yeeted_ToFar",
+      "name": "Bomb Fuse",
+      "seconds": 0.98,
+      "volume": 0.9,
+      "notes": "PRIMARY. Steady fuse sizzle, flat level across the clip (RMS 0.029-0.034), so it loops cleanly. Play it Looped as a 3D sound parented to the bomb on the carrier. Audio.lua has no looped-3D function yet (see method, finding 3). User-uploaded."
+    },
+    {
+      "key": "BombFuse.backup",
+      "assetId": "4639307587",
+      "verifiedLoads": true,
+      "creator": "MistfulWaters",
+      "name": "Fuse (loop)",
+      "seconds": 1.12,
+      "volume": 0.3,
+      "notes": "BACKUP. Steady loop, louder (RMS about 0.12). Do not use 82052527528544 or 4633141679: both fade out, so they cannot loop."
+    },
+    {
+      "key": "BombPass",
+      "assetId": "9117841338",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Pop Airy 1 (SFX)",
+      "seconds": 0.79,
+      "volume": 0.6,
+      "notes": "PRIMARY. Hollow airy pop for when the bomb changes hands. Play at pitch about 1.2 for a cuter 'boop'."
+    },
+    {
+      "key": "BombPass.backup",
+      "assetId": "9113263649",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Balloon Pop 3 (SFX)",
+      "seconds": 0.43,
+      "volume": 0.35,
+      "notes": "BACKUP. Sharper balloon pop, peak 0.77."
+    },
+    {
+      "key": "Explosion",
+      "assetId": "78012301000651",
+      "verifiedLoads": true,
+      "creator": "Clover Studios Games",
+      "name": "cartoon_explosion",
+      "seconds": 2.38,
+      "volume": 0.6,
+      "notes": "PRIMARY. Cartoon explosion for the bomb going off, peak 0.70. User or studio upload, public."
+    },
+    {
+      "key": "Explosion.backup",
+      "assetId": "9114086657",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Dirt Explosion 1 (SFX)",
+      "seconds": 1.12,
+      "volume": 0.7,
+      "notes": "BACKUP. Short, punchy, licensed. Alternate: ProSoundEffects 9120705982 'Whoosh Explosion 1' 1.75s (vol 0.35)."
+    },
+    {
+      "key": "LaserHum",
+      "assetId": "9119801545",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Synth Buzz Phasey Hum 1 (SFX)",
+      "seconds": 8.62,
+      "volume": 0.6,
+      "notes": "PRIMARY. Very even across the clip (RMS 0.070-0.074), so it loops cleanly. 3D Looped on each laser bar; use a small RollOffMaxDistance (about 60) so several lasers don't stack up. Do not use 126321934365548 'Laser Beam Loop V2': far too loud (RMS 0.8)."
+    },
+    {
+      "key": "LaserHum.backup",
+      "assetId": "162670130",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "UFO Beam",
+      "seconds": 16.74,
+      "volume": 0.25,
+      "notes": "BACKUP. Roblox-owned beam loop. Its level pulses (RMS 0.10-0.31)."
+    },
+    {
+      "key": "LaserZap",
+      "assetId": "9116227010",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Laser Blasts Transporter Elements 4 (SFX)",
+      "seconds": 0.84,
+      "volume": 0.45,
+      "notes": "PRIMARY. Laser zap with a falling metallic tone, for a player hit by a laser."
+    },
+    {
+      "key": "LaserZap.backup",
+      "assetId": "115842676995967",
+      "verifiedLoads": true,
+      "creator": "DailySoundsFX",
+      "name": "Laser Zap - Daily Sounds",
+      "seconds": 0.26,
+      "volume": 0.3,
+      "notes": "BACKUP. Very short, loud zap (peak 1.0). User-uploaded."
+    },
+    {
+      "key": "WallWhoosh",
+      "assetId": "9125959352",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Slowed Whip Swishes Whomping Airy Whoosh Bys (SFX)",
+      "seconds": 2.36,
+      "volume": 0.55,
+      "notes": "PRIMARY. Heavy, airy pass-by whoosh for the moving wall. Play 3D on the wall."
+    },
+    {
+      "key": "WallWhoosh.backup",
+      "assetId": "9126229255",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Whoosh By Fast Airy Swooshing Whipping Thuds (SFX)",
+      "seconds": 1.02,
+      "volume": 0.5,
+      "notes": "BACKUP. Faster whoosh. Alternate: ProSoundEffects 9114158497 'Doppler Whooshes Crackly Airy Bursts 3' 2.25s."
+    },
+    {
+      "key": "Cannon",
+      "assetId": "3149249837",
+      "verifiedLoads": true,
+      "creator": "Roblox",
+      "name": "Cannon_Explode",
+      "seconds": 3.82,
+      "volume": 0.45,
+      "notes": "PRIMARY. Roblox-owned cannon blast, peak 1.0. Play 3D at the cannon's muzzle."
+    },
+    {
+      "key": "Cannon.backup",
+      "assetId": "72411732778781",
+      "verifiedLoads": true,
+      "creator": "lukaian3900hm",
+      "name": "Cannon Fire Shot Sound Effect",
+      "seconds": 3.76,
+      "volume": 0.4,
+      "notes": "BACKUP. User-uploaded cannon shot, starts about 0.1 s late. Alternate: 140683456896595 'Cannon Shot' 1.49s, starts about 0.2 s late."
+    },
+    {
+      "key": "Splash",
+      "assetId": "9119481909",
+      "verifiedLoads": true,
+      "creator": "ProSoundEffects",
+      "name": "Splash Thunking Impact 1 (SFX)",
+      "seconds": 2.3,
+      "volume": 0.6,
+      "notes": "PRIMARY. Licensed 'falling into water' splash. Play it when a player hits the water in the fixed water-kill flow. Zero-risk fallback: the client's built-in rbxasset://sounds/impact_water.mp3, verified, 2.38s."
+    },
+    {
+      "key": "Splash.backup",
+      "assetId": "140727221118804",
+      "verifiedLoads": true,
+      "creator": "aks_sukinsin",
+      "name": "cartoon splash",
+      "seconds": 0.39,
+      "volume": 0.35,
+      "notes": "BACKUP. Short cartoon splash, peak 0.98. User-uploaded."
+    }
+  ]
+}

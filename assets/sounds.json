@@ -1,0 +1,258 @@
+{
+  "BatSwing": {
+    "id": "rbxassetid://9113305619",
+    "volume": 0.45
+  },
+  "BatSwingAlt": {
+    "id": "rbxassetid://9113305311",
+    "volume": 0.7
+  },
+  "BombFuse": {
+    "id": "rbxassetid://117020818319054",
+    "volume": 0.9
+  },
+  "BombFuseAlt": {
+    "id": "rbxassetid://4639307587",
+    "volume": 0.3
+  },
+  "BombPass": {
+    "id": "rbxassetid://9117841338",
+    "volume": 0.6
+  },
+  "BombPassAlt": {
+    "id": "rbxassetid://9113263649",
+    "volume": 0.35
+  },
+  "BombTick": {
+    "id": "rbxassetid://344101086",
+    "volume": 0.45
+  },
+  "BombTickAlt": {
+    "id": "rbxassetid://4940109913",
+    "volume": 0.6
+  },
+  "Cannon": {
+    "id": "rbxassetid://3149249837",
+    "volume": 0.45
+  },
+  "CannonAlt": {
+    "id": "rbxassetid://72411732778781",
+    "volume": 0.4
+  },
+  "ChestOpen": {
+    "id": "rbxassetid://9015096840",
+    "volume": 0.35
+  },
+  "ChestOpenAlt": {
+    "id": "rbxassetid://1839865408",
+    "volume": 0.55
+  },
+  "CoinCollect": {
+    "id": "rbxassetid://17208319162",
+    "volume": 0.7
+  },
+  "CoinCollectAlt": {
+    "id": "rbxassetid://1169806635",
+    "volume": 0.4
+  },
+  "Countdown": {
+    "id": "rbxassetid://12221990",
+    "volume": 0.8
+  },
+  "CountdownAlt": {
+    "id": "rbxassetid://16480580213",
+    "volume": 0.45
+  },
+  "Dash": {
+    "id": "rbxassetid://15675024286",
+    "volume": 0.45
+  },
+  "DashAlt": {
+    "id": "rbxassetid://15675028888",
+    "volume": 0.5
+  },
+  "Eliminated": {
+    "id": "rbxassetid://79348298352567",
+    "volume": 0.5
+  },
+  "EliminatedAlt": {
+    "id": "rbxassetid://87193628501201",
+    "volume": 0.5
+  },
+  "Explosion": {
+    "id": "rbxassetid://78012301000651",
+    "volume": 0.6
+  },
+  "ExplosionAlt": {
+    "id": "rbxassetid://9114086657",
+    "volume": 0.7
+  },
+  "Go": {
+    "id": "rbxassetid://9117261163",
+    "volume": 0.55
+  },
+  "GoAlt": {
+    "id": "rbxassetid://9118113825",
+    "volume": 0.55
+  },
+  "Hit": {
+    "id": "rbxassetid://3765689841",
+    "volume": 0.5
+  },
+  "HitAlt": {
+    "id": "rbxassetid://9117969990",
+    "volume": 0.35
+  },
+  "Jump": {
+    "id": "rbxassetid://9113863523",
+    "volume": 0.4
+  },
+  "JumpAlt": {
+    "id": "rbxassetid://12222124",
+    "volume": 0.35
+  },
+  "Land": {
+    "id": "rbxassetid://9113480917",
+    "volume": 0.35
+  },
+  "LandAlt": {
+    "id": "rbxassetid://9120880810",
+    "volume": 0.9
+  },
+  "LaserHum": {
+    "id": "rbxassetid://9119801545",
+    "volume": 0.6
+  },
+  "LaserHumAlt": {
+    "id": "rbxassetid://162670130",
+    "volume": 0.25
+  },
+  "LaserZap": {
+    "id": "rbxassetid://9116227010",
+    "volume": 0.45
+  },
+  "LaserZapAlt": {
+    "id": "rbxassetid://115842676995967",
+    "volume": 0.3
+  },
+  "LevelUp": {
+    "id": "rbxassetid://89481514209130",
+    "volume": 0.55
+  },
+  "LevelUpAlt": {
+    "id": "rbxassetid://15675043410",
+    "volume": 0.55
+  },
+  "MusicLobby1": {
+    "id": "rbxassetid://78804894697787",
+    "volume": 0.6
+  },
+  "MusicLobby1Alt": {
+    "id": "rbxassetid://109740999803693",
+    "volume": 0.6
+  },
+  "MusicLobby2": {
+    "id": "rbxassetid://116315512540304",
+    "volume": 0.8
+  },
+  "MusicLobby2Alt": {
+    "id": "rbxassetid://112489000993233",
+    "volume": 0.55
+  },
+  "MusicRound": {
+    "id": "rbxassetid://80191016555521",
+    "volume": 0.7
+  },
+  "MusicRoundAlt": {
+    "id": "rbxassetid://1837478855",
+    "volume": 0.8
+  },
+  "Purchase": {
+    "id": "rbxassetid://17208380755",
+    "volume": 0.7
+  },
+  "PurchaseAlt": {
+    "id": "rbxassetid://76200271553561",
+    "volume": 0.55
+  },
+  "Slide": {
+    "id": "rbxassetid://125793872900507",
+    "volume": 0.8
+  },
+  "SlideAlt": {
+    "id": "rbxassetid://9118771226",
+    "volume": 0.6
+  },
+  "Splash": {
+    "id": "rbxassetid://9119481909",
+    "volume": 0.6
+  },
+  "SplashAlt": {
+    "id": "rbxassetid://140727221118804",
+    "volume": 0.35
+  },
+  "UiClick": {
+    "id": "rbxassetid://17208204604",
+    "volume": 0.7
+  },
+  "UiClickAlt": {
+    "id": "rbxassetid://15675059323",
+    "volume": 0.45
+  },
+  "UiError": {
+    "id": "rbxassetid://17208353912",
+    "volume": 0.6
+  },
+  "UiErrorAlt": {
+    "id": "rbxassetid://15675075163",
+    "volume": 0.45
+  },
+  "UiHover": {
+    "id": "rbxassetid://17208339919",
+    "volume": 0.4
+  },
+  "UiHoverAlt": {
+    "id": "rbxassetid://10066931761",
+    "volume": 0.25
+  },
+  "UiOpen": {
+    "id": "rbxassetid://17208405682",
+    "volume": 0.8
+  },
+  "UiOpenAlt": {
+    "id": "rbxassetid://15675046931",
+    "volume": 0.4
+  },
+  "WallWhoosh": {
+    "id": "rbxassetid://9125959352",
+    "volume": 0.55
+  },
+  "WallWhooshAlt": {
+    "id": "rbxassetid://9126229255",
+    "volume": 0.5
+  },
+  "WheelTick": {
+    "id": "rbxassetid://16480550203",
+    "volume": 0.35
+  },
+  "WheelTickAlt": {
+    "id": "rbxassetid://12221976",
+    "volume": 0.25
+  },
+  "WheelWin": {
+    "id": "rbxassetid://1846251729",
+    "volume": 0.45
+  },
+  "WheelWinAlt": {
+    "id": "rbxassetid://1841976890",
+    "volume": 0.4
+  },
+  "Win": {
+    "id": "rbxassetid://9045808250",
+    "volume": 0.4
+  },
+  "WinAlt": {
+    "id": "rbxassetid://1840091947",
+    "volume": 0.4
+  }
+}

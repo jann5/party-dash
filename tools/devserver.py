@@ -3,6 +3,7 @@
 GET  /ping                      -> "pong"
 GET  /tree?root=<abs repo path> -> JSON tree of src/ using Rojo naming rules (see default.project.json)
 POST /save?path=<abs file path> -> writes the request body to that file (used to export data out of Studio)
+GET  /asset/<path under assets/> -> serves a PNG/JPG from the repo's assets/ folder (for Studio upload_image)
 
 Run:  python3 tools/devserver.py   (listens on 127.0.0.1:8765)
 Studio side: tools/studio_pull.luau (paste the file's content into execute_luau, with ROOT set).
@@ -14,6 +15,7 @@ CONTAINERS = {  # repo dir -> Studio location
     'src/shared': 'ReplicatedStorage/Shared',
     'src/server': 'ServerScriptService/Server',
     'src/client': 'StarterPlayer/StarterPlayerScripts/Client',
+    'src/first': 'ReplicatedFirst/PartyDashFirst',
 }
 EXTS = [('.server.luau', 'Script'), ('.server.lua', 'Script'), ('.client.luau', 'LocalScript'),
         ('.client.lua', 'LocalScript'), ('.luau', 'ModuleScript'), ('.lua', 'ModuleScript')]
@@ -74,6 +76,18 @@ class H(http.server.BaseHTTPRequestHandler):
                 if os.path.isdir(d):
                     out.append({'dest': dest, 'node': build(d, dest.split('/')[-1])})
             return self.reply(200, json.dumps(out), 'application/json')
+        if u.path.startswith('/asset/'):
+            # Read-only: serves PNG/JPG files from the repo's assets/ folder so the Studio MCP
+            # upload_image tool (http/https URLs only) can turn them into rbxassetids.
+            base = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', 'assets'))
+            p = os.path.realpath(os.path.join(base, urllib.parse.unquote(u.path[len('/asset/'):])))
+            if not p.startswith(base + os.sep) or not os.path.isfile(p):
+                return self.reply(404, 'no such asset')
+            ctype = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg'}.get(os.path.splitext(p)[1].lower())
+            if not ctype:
+                return self.reply(403, 'images only')
+            with open(p, 'rb') as f:
+                return self.reply(200, f.read(), ctype)
         self.reply(404, 'not found')
 
     def do_POST(self):
