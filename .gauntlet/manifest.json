@@ -29,23 +29,33 @@
     },
     "P4": {
       "wave": 2,
-      "status": "pending"
+      "status": "passed",
+      "attempts": 2,
+      "wastedAttempts": 0
     },
     "P5": {
       "wave": 2,
-      "status": "pending"
+      "status": "passed",
+      "attempts": 1,
+      "wastedAttempts": 0
     },
     "P6": {
       "wave": 2,
-      "status": "pending"
+      "status": "passed",
+      "attempts": 1,
+      "wastedAttempts": 0
     },
     "P7": {
       "wave": 2,
-      "status": "pending"
+      "status": "passed",
+      "attempts": 2,
+      "wastedAttempts": 0
     },
     "P8": {
       "wave": 2,
-      "status": "pending"
+      "status": "passed",
+      "attempts": 1,
+      "wastedAttempts": 0
     },
     "P9": {
       "wave": 3,
