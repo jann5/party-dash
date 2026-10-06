@@ -5,3 +5,4 @@ roblox.yml
 *.lock
 .DS_Store
 /out/
+.claude/

@@ -1,0 +1,17 @@
+{
+  "run": "party-dash",
+  "baseRef": "baseline-pre-partydash",
+  "reviewBranch": "review/party-dash",
+  "landingMode": "worktree-default",
+  "MAX_ATTEMPTS": 3,
+  "N_PIECES": 10,
+  "N_WAVES": 3,
+  "worstCaseSpawns": 64,
+  "spawnCeiling": 128,
+  "pieces": {
+    "P1": {"wave": 1, "status": "pending"}, "P2": {"wave": 1, "status": "pending"}, "P3": {"wave": 1, "status": "pending"},
+    "P4": {"wave": 2, "status": "pending"}, "P5": {"wave": 2, "status": "pending"}, "P6": {"wave": 2, "status": "pending"},
+    "P7": {"wave": 2, "status": "pending"}, "P8": {"wave": 2, "status": "pending"},
+    "P9": {"wave": 3, "status": "pending"}, "P10": {"wave": 3, "status": "pending"}
+  }
+}
