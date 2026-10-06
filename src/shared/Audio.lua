@@ -193,13 +193,41 @@ function Audio.currentMusic(): string?
 	return currentKey
 end
 
-task.spawn(function()
-	local remote = Net.event("Audio_Play")
-	remote.OnClientEvent:Connect(function(key, opts)
-		if typeof(key) == "string" then
-			Audio.play(key, typeof(opts) == "table" and opts or nil)
+-- Connect lazily without erroring or warning: the remote only exists once some server script requires Audio.
+local function hook(remote: Instance)
+	if remote.Name == "Audio_Play" and remote:IsA("RemoteEvent") then
+		remote.OnClientEvent:Connect(function(key, opts)
+			if typeof(key) == "string" then
+				Audio.play(key, typeof(opts) == "table" and opts or nil)
+			end
+		end)
+	end
+end
+local function watchFolder(folder: Instance)
+	local existing = folder:FindFirstChild("Audio_Play")
+	if existing then
+		hook(existing)
+	else
+		local conn
+		conn = folder.ChildAdded:Connect(function(c)
+			if c.Name == "Audio_Play" then
+				conn:Disconnect()
+				hook(c)
+			end
+		end)
+	end
+end
+local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
+if remotesFolder then
+	watchFolder(remotesFolder)
+else
+	local conn
+	conn = ReplicatedStorage.ChildAdded:Connect(function(c)
+		if c.Name == "Remotes" then
+			conn:Disconnect()
+			watchFolder(c)
 		end
 	end)
-end)
+end
 
 return Audio
