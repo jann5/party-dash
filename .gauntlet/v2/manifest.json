@@ -1,0 +1,13 @@
+{
+  "run": "party-dash-v2",
+  "baseRef": "baseline-pre-v2",
+  "phase0": "176d28e",
+  "reviewBranch": "review/party-dash",
+  "landingMode": "worktree-default",
+  "MAX_ATTEMPTS": 3,
+  "waves": {"1": ["V1","V2","V3","V4","V5","V6"], "2": ["V7","V8","V9","V10","V11","V12","V13"]},
+  "agentsPerAttempt": 3,
+  "worstCaseSpawnsWave1": 55,
+  "spawnCeilingWave1": 110,
+  "pieces": {}
+}
