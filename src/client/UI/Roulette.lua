@@ -109,6 +109,7 @@ local function makeCard(parent: Instance, info: Data.CardInfo, style: Style, ind
 	Kit.stroke(3.5, C.Ink, true).Parent = bubble
 	Kit.label(info.icon, {
 		Name = "Icon",
+		TextColor3 = C.Ink, -- monochrome glyphs take this colour; colour emoji ignore it
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.52),
 		Size = UDim2.fromScale(0.7, 0.7),

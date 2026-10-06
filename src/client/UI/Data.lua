@@ -19,10 +19,12 @@ export type CardInfo = {
 	kind: string,
 }
 
--- Only long-supported emoji (Unicode 6 era or older): newer ones (e.g. the coin) render as nothing.
+-- Only long-supported emoji: very new ones (e.g. the coin) render as nothing. Prefer glyphs with a default
+-- colour (emoji) presentation; text-presentation ones (e.g. U+26BD, U+2601) draw monochrome in TextColor3,
+-- which is why every icon label is drawn in Ink (never white on the white bubble).
 local MINIGAME_ICONS = {
 	LaserTracer = "⚡",
-	Dodgeball = "⚽",
+	Dodgeball = "🏐",
 	KingOfTheHill = "👑",
 	HoleInTheWall = "🚧",
 	Spin = "🌀",

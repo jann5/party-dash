@@ -95,6 +95,7 @@ function Intro.start(gui: ScreenGui, notify: NotifyApi?)
 	local iconScale = Kit.scaler(bubble)
 	local icon = Kit.label("🎲", {
 		Name = "Icon",
+		TextColor3 = C.Ink, -- monochrome glyphs take this colour; colour emoji ignore it
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.52),
 		Size = UDim2.fromScale(0.72, 0.72),
