@@ -15,6 +15,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Theme = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Theme"))
 
+local Motion = require(script.Parent.MotionRef)
+
 local Arena = {}
 
 Arena.TAG = "LaserTracerMap"
@@ -23,6 +25,12 @@ Arena.EMITTER_RADIUS = 48
 Arena.SPAWN_RADIUS = 21
 Arena.HUB_HEIGHT = 13
 Arena.LENS_DIM = Color3.fromRGB(70, 55, 120)
+-- Floor look. The game's lighting is a bright sun (Brightness 3 + warm color shift), so pale tiles burn
+-- out to white and swallow the beams. Mid-tone tiles + dark grout keep the floor colorful and let the
+-- neon lasers (and their floor glow lines) pop.
+Arena.GROUT = Color3.fromRGB(85, 65, 150)
+Arena.TILE_SHADE = 0.22 -- odd tiles: palette color pulled this far toward Theme ink
+Arena.TILE_DIM = 0.06 -- even tiles: a touch of ink so yellow/green do not clip
 
 local RING_EDGES = { 3.4, 9, 14.5, 20, 25.5, 31, 36.5, 42 }
 local TILE_LENGTH = 6.5 -- target tangential tile length
@@ -75,10 +83,10 @@ local function buildFloor(map: Model, center: CFrame): BasePart
 		Shape = Enum.PartType.Cylinder,
 		Size = Vector3.new(3, R * 2, R * 2),
 		CFrame = column(center, 0, -1.5, 0),
-		Color = Color3.fromRGB(255, 248, 240),
+		Color = Arena.GROUT,
 	})
 
-	-- Pastel tiles: concentric rings, alternating a palette color and its lighter tint. Neighbours sit at
+	-- Pastel tiles: concentric rings, alternating a palette color and a deeper shade of it. Neighbours sit at
 	-- slightly different heights so their overlapping inner corners never z-fight.
 	local palette = Theme.MapPalette
 	for k = 1, #RING_EDGES - 1 do
@@ -87,8 +95,9 @@ local function buildFloor(map: Model, center: CFrame): BasePart
 		local n = math.max(6, math.ceil(2 * math.pi * rMid / TILE_LENGTH))
 		n += n % 2
 		local length = 2 * rMid * math.tan(math.pi / n) * 0.965
-		local color = palette[(k - 1) % #palette + 1]
-		local tint = color:Lerp(Theme.Colors.White, 0.55)
+		local base = palette[(k - 1) % #palette + 1]
+		local color = base:Lerp(Theme.Colors.Ink, Arena.TILE_DIM)
+		local tint = base:Lerp(Theme.Colors.Ink, Arena.TILE_SHADE)
 		local twist = if k % 2 == 0 then math.pi / n else 0
 		for j = 0, n - 1 do
 			local a = j * 2 * math.pi / n + twist
@@ -171,8 +180,8 @@ local function buildHub(map: Model, center: CFrame)
 		Color = C.Panel,
 	})
 	-- The two beam heights, color coded like the lasers they fire.
-	ring(hub, center, 0, 1.6, 0, 3.75, C.Laser).Name = "LowRing"
-	ring(hub, center, 0, 4.6, 0, 3.75, C.LaserAlt).Name = "HighRing"
+	ring(hub, center, 0, Motion.HEIGHT.low, 0, 3.75, Motion.COLORS.low).Name = "LowRing"
+	ring(hub, center, 0, Motion.HEIGHT.high, 0, 3.75, Motion.COLORS.high).Name = "HighRing"
 	for _, y in { 8, 10.2 } do
 		ghost(part(hub, {
 			Name = "Stripe",
@@ -216,8 +225,8 @@ local function buildEmitters(map: Model, center: CFrame)
 			CFrame = column(center, x, -1.5, z),
 			Color = C.Panel,
 		}))
-		ring(tower, center, x, 1.6, z, 1.75, C.Laser).Name = "LowRing"
-		ring(tower, center, x, 4.6, z, 1.75, C.LaserAlt).Name = "HighRing"
+		ring(tower, center, x, Motion.HEIGHT.low, z, 1.75, Motion.COLORS.low).Name = "LowRing"
+		ring(tower, center, x, Motion.HEIGHT.high, z, 1.75, Motion.COLORS.high).Name = "HighRing"
 		ghost(part(tower, {
 			Name = "Stripe",
 			Shape = Enum.PartType.Cylinder,

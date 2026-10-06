@@ -34,11 +34,13 @@ local Motion = require(script.MotionRef)
 
 local HIT_COOLDOWN = 1 -- per player
 local SLIDE_GRACE = 0.15 -- a slide that ended this recently still counts (replication jitter)
-local KNOCK_POWER = 125 -- ~130 at the start, a bit more as intensity grows
-local KNOCK_PER_INTENSITY = 10
+-- Knockback: a hit is a big, readable launch (~40 studs of flight at the start) that you can survive near
+-- the middle but not near the edge; it grows with intensity until late hits throw anyone off the map.
+local KNOCK_POWER = 95
+local KNOCK_PER_INTENSITY = 15
 local KNOCK_MAX = 165
 local KNOCK_STUN = 0.6
-local OUTWARD = 0.4 -- share of "away from the center" mixed into the beam's push direction
+local OUTWARD = 0.3 -- share of "away from the center" mixed into the beam's push direction
 local MAX_LAG = 0.2
 
 -- Fired to everyone; clients draw the zap on the hit player (ignoring maps they cannot see).

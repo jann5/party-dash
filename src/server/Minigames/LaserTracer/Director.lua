@@ -4,7 +4,9 @@ Laser Tracer: escalation director for ONE session. Decides when and which lasers
 ctx.intensity() (1 at the start, +1 every Config.INTENSITY_RAMP_SECONDS, forever).
 
 	Sweeps   rays rotating around the hub. All share one angular speed (map attribute "LaserSpeed"),
-	         1 -> 4 of them as intensity grows; at high intensity they all reverse together (telegraphed).
+	         2 -> 4 of them as intensity grows; at high intensity they all reverse together (telegraphed).
+	         The round opens with one LOW (red, jump) sweep and then one HIGH (cyan, slide) sweep on the
+	         opposite side, turning the same way: from the first seconds players alternate jump / slide.
 	Slides   straight lasers crossing from any side; singles, then low+high combos, then cross waves.
 
 Fairness rules (frantic but always beatable):
@@ -29,7 +31,8 @@ Director.MAX_LASERS = 9
 Director.REVERSE_FROM = 2.2 -- intensity at which sweeps start reversing
 Director.REVERSE_WARN = 0.9
 Director.FIRST_SWEEP_DELAY = 0.6
-Director.FIRST_SLIDE_DELAY = 3.2
+Director.SECOND_SWEEP_DELAY = 1.6 -- after the first one, so each gets its own telegraph
+Director.FIRST_SLIDE_DELAY = 7
 
 -- Angular speed (rad/s) of every sweep: 0.55 at intensity 1, ~1.09 at 2.5, capped so it stays dodgeable.
 function Director.sweepSpeed(intensity: number): number
@@ -45,11 +48,9 @@ function Director.slideInterval(intensity: number): number
 end
 
 function Director.sweepTarget(intensity: number): number
-	if intensity < 1.3 then
-		return 1
-	elseif intensity < 2.0 then
+	if intensity < 1.6 then
 		return 2
-	elseif intensity < 2.9 then
+	elseif intensity < 2.6 then
 		return 3
 	end
 	return 4
@@ -89,7 +90,7 @@ function Director.new(set: LaserSet, map: Model, rng: Random, announce: (string,
 		nextReverseAt = math.huge,
 		sweepsSpawned = 0,
 		slidesSpawned = 0,
-		level = 1,
+		level = Director.sweepTarget(1),
 		reversed = false,
 	}, Director)
 	self:publishSpeed()
@@ -138,8 +139,9 @@ function Director.spawnSweep(self: Director, now: number, intensity: number)
 
 	-- Direction + kind, compatible with every sweep already out (see the fairness rules above).
 	local kind, dir
-	if self.sweepsSpawned == 0 then
-		kind, dir = "low", self.spin
+	if self.sweepsSpawned < 2 then
+		-- The opening pair: red first, then cyan, same direction (they never meet).
+		kind, dir = (if self.sweepsSpawned == 0 then "low" else "high"), self.spin
 	else
 		local lows, highs = 1, 1
 		for _, laser in sweeps do
@@ -257,8 +259,7 @@ function Director.spawnWave(self: Director, now: number, intensity: number): num
 	self.slidesSpawned += 1
 
 	if wave == "single" then
-		-- The opening slide is a HIGH one so players meet both laser types in the first seconds.
-		self:addSlide(now, if self.slidesSpawned == 1 then "high" else singleKind(), heading, speed, 0)
+		self:addSlide(now, singleKind(), heading, speed, 0)
 		return 0
 	elseif wave == "combo" or wave == "comboCross" then
 		local first = anyKind()
@@ -301,7 +302,7 @@ function Director.step(self: Director, now: number, intensity: number)
 		if #self.set:alive(now, "sweep") < wanted then
 			self:spawnSweep(now, intensity)
 			total += 1
-			self.nextSweepAt = now + 2.2
+			self.nextSweepAt = now + (if self.sweepsSpawned == 1 then Director.SECOND_SWEEP_DELAY else 2.2)
 		end
 	end
 

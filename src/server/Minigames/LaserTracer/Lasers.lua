@@ -28,10 +28,7 @@ export type Laser = {
 local LaserSet = {}
 LaserSet.__index = LaserSet
 
-LaserSet.COLORS = {
-	low = Theme.Colors.Laser,
-	high = Theme.Colors.LaserAlt,
-} :: { [string]: Color3 }
+LaserSet.COLORS = Motion.COLORS
 LaserSet.LABELS = { low = "JUMP!", high = "SLIDE!" } :: { [string]: string }
 LaserSet.PREVIEW_OFFSET = Motion.RADIUS - 5 -- slide previews show the first chord inside the rim
 LaserSet.LINGER = 0.3 -- keep the Model this long after the client fade so the fade can play

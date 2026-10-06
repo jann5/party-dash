@@ -29,6 +29,14 @@ Motion.HEIGHT = { low = 1.6, high = 4.6 } :: { [string]: number } -- beam height
 Motion.HIT_HALF_WIDTH = 1.15 -- beam radius + half a body: the horizontal hit band is 2x this wide
 Motion.FADE_TIME = 0.35 -- client fade-out after tOff
 
+-- The two laser colors, shared by every visual on both sides (beams, previews, emitter and hub rings).
+-- Deliberately purer than Theme.Colors.Laser/LaserAlt: under the game's bright sun + bloom, the theme's
+-- pink-red neon read magenta and its teal faded into the floor. Pure red vs pure cyan stay unmistakable.
+Motion.COLORS = {
+	low = Color3.fromRGB(255, 30, 30),
+	high = Color3.fromRGB(0, 215, 255),
+} :: { [string]: Color3 }
+
 export type State = {
 	pattern: string, -- "sweep" | "slide"
 	kind: string, -- "low" | "high"

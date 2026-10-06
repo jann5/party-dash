@@ -7,14 +7,16 @@ local TweenService = game:GetService("TweenService")
 
 local Theme = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Theme"))
 
+local Motion = require(script.Parent.Motion)
+
 local Fx = {}
 
-Fx.COLORS = {
-	low = Theme.Colors.Laser,
-	high = Theme.Colors.LaserAlt,
-} :: { [string]: Color3 }
-Fx.CORE_THICKNESS = 0.5
-Fx.GLOW_THICKNESS = 1.35
+Fx.COLORS = Motion.COLORS
+Fx.CORE_THICKNESS = 0.55
+Fx.GLOW_THICKNESS = 1.5
+Fx.CORE_WHITENESS = 0.12 -- just a hint of white-hot core; more washes the hue out under bloom
+Fx.GLOW_TRANSPARENCY = 0.6
+Fx.FLOOR_TRANSPARENCY = 0.4
 Fx.NODE_SIZE = 1.5
 
 local SPARK_TEXTURE = "rbxasset://textures/particles/sparkles_main.dds"
@@ -72,11 +74,11 @@ end
 -- One beam: bright core + soft glow + a glowing "shadow" line on the floor (depth cue for jumping)
 -- + a spark-spitting node at each end.
 function Fx.newBeam(parent: Instance, kind: string): Beam
-	local color = Fx.COLORS[kind] or Theme.Colors.Laser
-	local coreColor = color:Lerp(Theme.Colors.White, 0.35)
+	local color = Fx.COLORS[kind] or Fx.COLORS.low
+	local coreColor = color:Lerp(Theme.Colors.White, Fx.CORE_WHITENESS)
 	local core = neon(parent, "BeamCore", coreColor, 0, Enum.PartType.Cylinder)
-	local glow = neon(parent, "BeamGlow", color, 0.7, Enum.PartType.Cylinder)
-	local floor = neon(parent, "BeamFloor", color, 0.45)
+	local glow = neon(parent, "BeamGlow", color, Fx.GLOW_TRANSPARENCY, Enum.PartType.Cylinder)
+	local floor = neon(parent, "BeamFloor", color, Fx.FLOOR_TRANSPARENCY)
 	local nodeA = neon(parent, "NodeA", coreColor, 0, Enum.PartType.Ball)
 	local nodeB = neon(parent, "NodeB", coreColor, 0, Enum.PartType.Ball)
 	nodeA.Size = Vector3.one * Fx.NODE_SIZE
@@ -126,8 +128,8 @@ function Fx.setVisible(beam: Beam, visible: boolean)
 	end
 	beam.visible = visible
 	beam.core.Transparency = if visible then 0 else 1
-	beam.glow.Transparency = if visible then 0.7 else 1
-	beam.floor.Transparency = if visible then 0.45 else 1
+	beam.glow.Transparency = if visible then Fx.GLOW_TRANSPARENCY else 1
+	beam.floor.Transparency = if visible then Fx.FLOOR_TRANSPARENCY else 1
 	beam.nodeA.Transparency = if visible then 0 else 1
 	beam.nodeB.Transparency = if visible then 0 else 1
 	for _, light in beam.lights do
@@ -140,7 +142,7 @@ end
 
 -- Zap on a hit player: flash ball, a few lightning shards, a spark burst. Cleans itself up.
 function Fx.zap(parent: Instance, position: Vector3, kind: string, rng: Random): BasePart
-	local color = Fx.COLORS[kind] or Theme.Colors.Laser
+	local color = Fx.COLORS[kind] or Fx.COLORS.low
 	local flash = neon(parent, "Zap", Theme.Colors.White, 0.1, Enum.PartType.Ball)
 	flash.Size = Vector3.one * 1.5
 	flash.CFrame = CFrame.new(position)
