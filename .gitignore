@@ -1,0 +1,7 @@
+tools/bin/
+roblox.yml
+*.rbxl
+*.rbxlx
+*.lock
+.DS_Store
+/out/
