@@ -11,10 +11,11 @@ Baseline tag: `baseline-pre-partydash`. Review branch: `review/party-dash`. Land
 | P6 Hole in the Wall | 2 | passed | 1 | merged |
 | P7 King of the Hill | 2 | passed | 2 | merged |
 | P8 Spin port + Modifiers | 2 | passed | 1 | merged |
-| P9 Economy (coins, upgrades, cosmetics, Robux) | 3 | pending | | |
-| P10 Solo Record + global TOP 10 | 3 | pending | | |
+| P9 Economy (coins, upgrades, cosmetics, Robux) | 3 | passed | 1 | merged |
+| P10 Solo Record + global TOP 10 | 3 | passed | 1 | merged |
 
 ## Failure details / judge caveats
+Wave 3: no failures (P9, P10 passed).
 Wave 2: no failures (P4-P8 all passed).
 No wave 1 failures (all three pieces passed).
 
@@ -43,3 +44,9 @@ P7 King of the Hill: caveats: (1) Studio's screen_capture rendered the 3D viewpo
 P8 Spin port + Modifiers: caveat: arena visuals ("polished, cartoon, readable") unverified by eye because Studio's 3D viewport rendered blank in Play and Edit mode. contractGaps: No frozen contract was edited. Two gaps were worked around:
 1. There is no shared code location that both a minigame's server code and its client code may write to. For one source of truth, the server requires the client-owned BarMath ModuleScript from StarterPlayerScripts.
 2. The Modifier contract gives clear(ctx) only ctx and forbids module-level state, so there is nowhere to remember "this modifier is active". I used a Player attribute (Mod_Active) as that per-round flag, plus character and part attributes that store the original values to restore.
+
+Wave 3 contract notes from passed pieces (verbatim lastSummary caveats and contractGaps):
+
+P9 Economy: caveat: ran in Studio Play with the DataStore in-memory fallback; real DataStore session locking verified only by code review. Minor cosmetic nits: the "BEST VALUE" badge on the Robux tab is slightly clipped at the scroll edge, and the coin-pack icon tiles have a muddy brown backdrop. contractGaps: Signals.lua and Config.lua are plain module tables. If the critic's execute_luau/command bar gets its own copy of every ModuleScript, `Signals.RoundFinished:Fire` from there would not reach the game's handlers, and remapping `Config.PRODUCTS` there would not affect the live server. I worked around both in my own files: the Economy module forwards to the live instance through a BindableFunction "EconomyApi"; that VM's copy of Economy (once required there) also forwards that VM's Signals; and processReceipt sends along the product key it resolved with its own Config. If execute_luau shares the game's VM, none of this is used. Also, no frozen contract lists the extra Player attributes I added (EconomyLoaded, XPNext, Owned_Cosmetics, Pass_DoubleCoins, Pass_VIP); they are documented in src/shared/Economy/Rules.lua.
+
+P10 Solo Record: caveats: With one player, P10-2 cannot show the main loop cycling: the phase goes Waiting when a solo run starts and back to Lobby when it ends (RoundLoop.eligible() skips InSolo players). 3D screenshots were often black right after phase changes, so the board's look was judged from one angled lobby capture plus a dump of its labels. contractGaps: 1. P10-2 with a single player: Core's RoundLoop.eligible() skips InSolo players (correct), and MIN_LOBBY_PLAYERS is 1. So when the only player in the server is in a solo run, Core drops to Phase "Waiting" and stays there until the run ends. "The main loop keeps cycling" can only be seen with 2 or more players, or as the change into Waiting. Fixing it would mean changing Core, which this piece cannot do. 2. Core does skip InSolo players everywhere checked: RoundLoop.eligible, Places.audience (used by returnToLobby, Intro and Results announcements), Places.route, the rescue loop, and Modifiers' CharacterEffect. 3. The P3 UI (PartyHUD/PartyOverlay) does not react to InSolo, so its roulette, intro and results overlays would cover a solo run. I hide those two ScreenGuis on the client during the run instead. 4. The Spin client (src/client/Minigames/Spin) only computes the local player's ring angle when InRound is true. Its "bar incoming" warning therefore does not work in Solo, where InRound is false. This is outside P10's paths; the fix belongs in Spin. 5. Context's onFinish "safety" fuse (Config.SAFETY_ROUND_LIMIT = 300s) would cut a no-time-limit solo run. Solo ignores that reason, and the Context keeps running because it only reports it.

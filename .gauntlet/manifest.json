@@ -59,11 +59,15 @@
     },
     "P9": {
       "wave": 3,
-      "status": "pending"
+      "status": "passed",
+      "attempts": 1,
+      "wastedAttempts": 0
     },
     "P10": {
       "wave": 3,
-      "status": "pending"
+      "status": "passed",
+      "attempts": 1,
+      "wastedAttempts": 0
     }
   }
 }
