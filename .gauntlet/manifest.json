@@ -9,9 +9,51 @@
   "worstCaseSpawns": 64,
   "spawnCeiling": 128,
   "pieces": {
-    "P1": {"wave": 1, "status": "pending"}, "P2": {"wave": 1, "status": "pending"}, "P3": {"wave": 1, "status": "pending"},
-    "P4": {"wave": 2, "status": "pending"}, "P5": {"wave": 2, "status": "pending"}, "P6": {"wave": 2, "status": "pending"},
-    "P7": {"wave": 2, "status": "pending"}, "P8": {"wave": 2, "status": "pending"},
-    "P9": {"wave": 3, "status": "pending"}, "P10": {"wave": 3, "status": "pending"}
+    "P1": {
+      "wave": 1,
+      "status": "passed",
+      "attempts": 1,
+      "wastedAttempts": 0
+    },
+    "P2": {
+      "wave": 1,
+      "status": "passed",
+      "attempts": 1,
+      "wastedAttempts": 0
+    },
+    "P3": {
+      "wave": 1,
+      "status": "passed",
+      "attempts": 3,
+      "wastedAttempts": 0
+    },
+    "P4": {
+      "wave": 2,
+      "status": "pending"
+    },
+    "P5": {
+      "wave": 2,
+      "status": "pending"
+    },
+    "P6": {
+      "wave": 2,
+      "status": "pending"
+    },
+    "P7": {
+      "wave": 2,
+      "status": "pending"
+    },
+    "P8": {
+      "wave": 2,
+      "status": "pending"
+    },
+    "P9": {
+      "wave": 3,
+      "status": "pending"
+    },
+    "P10": {
+      "wave": 3,
+      "status": "pending"
+    }
   }
 }
