@@ -36,11 +36,11 @@ stopwatch, crown, coin, coin_stack, coin_sack, coin_chest, xp_star, lightning, r
 bat, trail_rainbow, speed_shoe, spring, hourglass, party_popper, music, speaker, mg_lasertracer, mg_dodgeball,
 mg_holeinthewall, mg_spin, mg_bombtag, mg_random, medal, join_pad, lock, starter_pack, trail_fire, trail_galaxy,
 trail_gold, trail_ice, explosion, coins_x2, vip_ticket, potion.
-PLANNED keys (usable now; they show a similar icon until the lead generates the real one tonight): fire_streak,
+Also generated (real icons now): fire_streak,
 calendar_star, thumbs_up, group_friends, check_badge, sale_tag, alarm_clock, spin_ticket, skull_out, mod_low_gravity,
 mod_turbo, mod_fog, mod_giant, mod_tiny, mod_slippery, podium, boost_xp, vip_badge, hit_star, splash, arrow_jump,
 arrow_slide, trail_hearts, trail_lightning, trail_bubbles, win_fireworks, win_crown_rain, win_star_sparkles,
-action_dash, action_slide, action_swing, action_throw, mega_chest, coin_mountain, target_lock.
+action_dash, action_slide, action_swing, action_throw, mega_chest, coin_mountain, target_lock, jump_pad, win_star_sparkles.
 Minigame card icons: `mg_<lowercase id>` (mg_bombtag, mg_lasertracer, mg_dodgeball, mg_holeinthewall, mg_spin,
 mg_random). The minigame definition's `icon` field uses these keys.
 
