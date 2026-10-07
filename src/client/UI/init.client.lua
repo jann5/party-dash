@@ -1,96 +1,38 @@
--- Party Dash UI boot (P3). Builds three ScreenGuis and starts every HUD module:
---   PartyHUD     (safe-area aware)  status pill + timer, alive counter, MenuRail, lobby logo, TOP 3, hints
---   PartyOverlay (full screen)      roulettes, intro card, results, confetti
---   PartyNotify  (safe-area aware)  Core_Announce big text / kill feed / toasts (always on top)
--- Every module only reads GameState / MinigameInfo / ModifierInfo, so the UI works without Core code.
-local Players = game:GetService("Players")
+--!nonstrict
+-- Party Dash HUD v2 (piece V5). Every round-related screen, built with Shared.UIKit (ART_BIBLE section 8):
+--   Status    top lane: NEXT GAME timer + join hints / YOU'RE IN, then the round's game, alive count, sudden death
+--   Vote      three vote cards in the Action lane (queued players, Lobby)
+--   Roulette  full-screen reel that lands on the chosen game / modifier
+--   Intro     how-to-play card (round members, Intro)
+--   Hype      huge transient words: Core_Announce "big" and the 3-2-1-GO countdown
+--   Announce  routes Core_Announce: big -> Hype, feed -> kill feed lane, toast -> UIKit.toast
+--   Death     OUT! panel with Spectate / Lobby / Revive (Core_Death)
+--   Results   podium, MVP and the coin breakdown (End)
+--   Tutorial  DASH / SLIDE / JUMP hint chips for new players
+-- Spectating itself lives in src/client/Spectate. Modules only read replicated state and connect to remotes
+-- lazily, so the HUD boots and works before Core, Economy or any minigame exist.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
 
--- make sure the shared modules the HUD requires have replicated before anything indexes them
 if not game:IsLoaded() then
 	game.Loaded:Wait()
 end
-local shared = ReplicatedStorage:WaitForChild("Shared")
-for _, name in { "Config", "GameState", "Net", "Theme" } do
-	shared:WaitForChild(name)
-end
+ReplicatedStorage:WaitForChild("Shared"):WaitForChild("UIKit")
 
-local Confetti = require(script.Confetti)
-local Hud = require(script.Hud)
-local Intro = require(script.Intro)
-local Kit = require(script.Kit)
-local Lobby = require(script.Lobby)
-local Notify = require(script.Notify)
-local Results = require(script.Results)
-local Roulette = require(script.Roulette)
-local Scoreboard = require(script.Scoreboard)
-local Tutorial = require(script.Tutorial)
-
-local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
-
-local function screenGui(name: string, order: number, fullScreen: boolean): ScreenGui
-	local existing = playerGui:FindFirstChild(name)
-	if existing then
-		existing:Destroy()
+-- The custom HUD replaces the default player list (it covered the currency and the feed). Chat stays.
+task.spawn(function()
+	for _ = 1, 60 do
+		pcall(StarterGui.SetCoreGuiEnabled, StarterGui, Enum.CoreGuiType.PlayerList, false)
+		if not StarterGui:GetCoreGuiEnabled(Enum.CoreGuiType.PlayerList) then
+			return
+		end
+		task.wait(0.5)
 	end
-	local gui = Instance.new("ScreenGui")
-	gui.Name = name
-	gui.ResetOnSpawn = false
-	gui.DisplayOrder = order
-	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-	gui.IgnoreGuiInset = fullScreen
-	if fullScreen then
-		-- cover the whole screen (dims), content inside is centered so notches don't matter
-		pcall(function()
-			gui.ScreenInsets = Enum.ScreenInsets.None
-		end)
-	end
-	gui.Parent = playerGui
-	return gui
+end)
+
+-- Each module starts in its own thread: one failing module can never take the rest of the HUD down.
+for _, name in { "Status", "Vote", "Roulette", "Intro", "Hype", "Announce", "Death", "Results", "Tutorial" } do
+	task.spawn(function()
+		require(script:WaitForChild(name)).start()
+	end)
 end
-
-local hud = screenGui("PartyHUD", 5, false)
-local overlay = screenGui("PartyOverlay", 10, true)
-local notifyGui = screenGui("PartyNotify", 20, false)
-
--- keep cartoon outlines proportional to the screen size
-local function onResize()
-	Kit.setViewport(overlay.AbsoluteSize)
-end
-overlay:GetPropertyChangedSignal("AbsoluteSize"):Connect(onResize)
-onResize()
-
-local function run(name: string, fn: () -> ())
-	-- one broken module must never take the rest of the HUD down with it
-	local ok, err = pcall(fn)
-	if not ok then
-		warn(("[PartyUI] %s failed to start: %s"):format(name, tostring(err)))
-	end
-end
-
-Confetti.init(overlay)
-local notify: Notify.Api? = nil
-run("Notify", function()
-	notify = Notify.start(notifyGui)
-end)
-run("Hud", function()
-	Hud.start(hud)
-end)
-run("Lobby", function()
-	Lobby.start(hud)
-end)
-run("Scoreboard", function()
-	Scoreboard.start(hud)
-end)
-run("Tutorial", function()
-	Tutorial.start(hud)
-end)
-run("Roulette", function()
-	Roulette.start(overlay)
-end)
-run("Intro", function()
-	Intro.start(overlay, notify)
-end)
-run("Results", function()
-	Results.start(overlay, notify)
-end)

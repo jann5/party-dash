@@ -1,237 +1,66 @@
--- Party Dash: spectate bar. While Player.Spectating is true, a bottom-center bar
--- "SPECTATING <Name>" lets you cycle through players still in the round (arrows or Q / E),
--- the camera follows them, and STOP gives the camera back to you (WATCH resumes).
-local Players = game:GetService("Players")
+--!nonstrict
+-- Party Dash spectating (V5), camera-only:
+--   * Player.Spectating (set by Core after a "spectate" choice) -> the camera follows a living participant and the
+--     spectate bar shows the target, prev / next (Q / E), LOBBY (Core_DeathChoice "lobby") and REVIVE while the
+--     offer is open. "Nobody left" when the round has no one else alive. Spectating = false gives the camera back.
+--   * Lobby players get a "Watch" tile (UIKit.Dock "Right") during a Round, and the lobby's LIVE TV prompt
+--     (PD_Action "Watch"): both ask Core to spectate.
+local ContextActionService = game:GetService("ContextActionService")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
-local Theme = require(ReplicatedStorage:WaitForChild("Shared").Theme)
-
-local localPlayer = Players.LocalPlayer
-local C = Theme.Colors
-
--- UI ---------------------------------------------------------------------------------------------------
-
-local gui = Instance.new("ScreenGui")
-gui.Name = "SpectateGui"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.DisplayOrder = 5
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-local SHOWN_POS = UDim2.new(0.5, 0, 1, -16)
-local HIDDEN_POS = UDim2.new(0.5, 0, 1, 140)
-
-local bar = Instance.new("Frame")
-bar.Name = "SpectatingBar"
-bar.AnchorPoint = Vector2.new(0.5, 1)
-bar.Position = HIDDEN_POS
-bar.Size = UDim2.fromScale(0.56, 0.13)
-bar.BackgroundColor3 = C.Panel
-bar.Visible = false
-bar.Parent = gui
-
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0.3, 0)
-corner.Parent = bar
-local barStroke = Instance.new("UIStroke")
-barStroke.Color = C.Ink
-barStroke.Thickness = Theme.StrokeThickness
-barStroke.Parent = bar
-local aspect = Instance.new("UIAspectRatioConstraint")
-aspect.AspectRatio = 6.4
-aspect.Parent = bar
-local sizeLimit = Instance.new("UISizeConstraint")
-sizeLimit.MinSize = Vector2.new(320, 50)
-sizeLimit.MaxSize = Vector2.new(640, 100)
-sizeLimit.Parent = bar
-
-local function textLabel(parent: Instance, name: string, text: string, color: Color3, maxSize: number): TextLabel
-	local l = Instance.new("TextLabel")
-	l.Name = name
-	l.BackgroundTransparency = 1
-	l.FontFace = Theme.FontFace
-	l.Text = text
-	l.TextScaled = true
-	l.TextColor3 = color
-	l.Parent = parent
-	local s = Instance.new("UIStroke")
-	s.Color = C.Ink
-	s.Thickness = 2
-	s.Parent = l
-	local limit = Instance.new("UITextSizeConstraint")
-	limit.MaxTextSize = maxSize
-	limit.Parent = l
-	return l
+if not game:IsLoaded() then
+	game.Loaded:Wait()
 end
+local UIKit = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("UIKit"))
 
-local function roundButton(name: string, text: string, color: Color3, anchorX: number, posX: number): TextButton
-	local b = Instance.new("TextButton")
-	b.Name = name
-	b.AnchorPoint = Vector2.new(anchorX, 0.5)
-	b.Position = UDim2.fromScale(posX, 0.5)
-	b.Size = UDim2.fromScale(0.13, 0.78)
-	b.BackgroundColor3 = color
-	b.AutoButtonColor = false
-	b.FontFace = Theme.FontFace
-	b.Text = text
-	b.TextScaled = true
-	b.TextColor3 = C.White
-	b.Parent = bar
-	local cornerB = Instance.new("UICorner")
-	cornerB.CornerRadius = UDim.new(0.5, 0)
-	cornerB.Parent = b
-	local strokeB = Instance.new("UIStroke")
-	strokeB.Color = C.Ink
-	strokeB.Thickness = Theme.StrokeThickness
-	strokeB.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	strokeB.Parent = b
-	local textStroke = Instance.new("UIStroke")
-	textStroke.Color = C.Ink
-	textStroke.Thickness = 2
-	textStroke.Parent = b
-	local pad = Instance.new("UIPadding")
-	pad.PaddingTop = UDim.new(0.14, 0)
-	pad.PaddingBottom = UDim.new(0.14, 0)
-	pad.Parent = b
-	local scale = Instance.new("UIScale")
-	scale.Parent = b
-	-- Juicy hover/press feedback.
-	local function tweenScale(target: number)
-		TweenService:Create(scale, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-			Scale = target,
-		}):Play()
+local UI = script.Parent:WaitForChild("UI")
+local Remotes = require(UI:WaitForChild("Remotes"))
+local State = require(UI:WaitForChild("State"))
+local Widgets = require(UI:WaitForChild("Widgets"))
+
+local Bar = require(script:WaitForChild("Bar"))
+local Follow = require(script:WaitForChild("Follow"))
+
+local player = State.player
+local REFRESH = 0.4 -- seconds between target checks (deaths, leavers, respawns)
+local KEY_PRIORITY = Enum.ContextActionPriority.High.Value + 100 -- above movement, so Q never dashes while watching
+
+local active = false
+local stopped = false -- LOBBY pressed: stop locally right away, even before the server answers
+local serial = 0
+local bar
+local sync
+
+local function cycle(dir: number)
+	if active then
+		bar.setTarget(Follow.step(dir))
 	end
-	b.MouseEnter:Connect(function()
-		tweenScale(1.08)
-	end)
-	b.MouseLeave:Connect(function()
-		tweenScale(1)
-	end)
-	b.MouseButton1Down:Connect(function()
-		tweenScale(0.9)
-	end)
-	b.MouseButton1Up:Connect(function()
-		tweenScale(1.08)
-	end)
-	return b
 end
 
-local prevButton = roundButton("Prev", "<", C.Yellow, 0, 0.02)
-local nextButton = roundButton("Next", ">", C.Yellow, 0, 0.16)
-nextButton.Position = UDim2.fromScale(0.69, 0.5)
-local stopButton = roundButton("Stop", "STOP", C.Red, 1, 0.98)
-stopButton.Size = UDim2.fromScale(0.15, 0.62)
+bar = Bar.new({
+	onPrev = function()
+		cycle(-1)
+	end,
+	onNext = function()
+		cycle(1)
+	end,
+	onLobby = function()
+		stopped = true
+		Remotes.fire("Core_DeathChoice", "lobby")
+		sync()
+	end,
+})
 
-local title = textLabel(bar, "Title", "SPECTATING", C.Cyan, 22)
-title.AnchorPoint = Vector2.new(0.5, 0)
-title.Position = UDim2.fromScale(0.42, 0.08)
-title.Size = UDim2.fromScale(0.5, 0.3)
-
-local targetName = textLabel(bar, "TargetName", "", C.White, 42)
-targetName.AnchorPoint = Vector2.new(0.5, 0)
-targetName.Position = UDim2.fromScale(0.42, 0.38)
-targetName.Size = UDim2.fromScale(0.5, 0.5)
-
-local keyHint = textLabel(bar, "KeyHint", "Q / E", C.Yellow, 16)
-keyHint.AnchorPoint = Vector2.new(0.5, 0)
-keyHint.Position = UDim2.fromScale(0.42, -0.32)
-keyHint.Size = UDim2.fromScale(0.3, 0.26)
-keyHint.Visible = UserInputService.KeyboardEnabled
-
-gui.Parent = localPlayer:WaitForChild("PlayerGui")
-
--- Logic --------------------------------------------------------------------------------------------------
-
-local active = false -- bar shown (we are spectating)
-local watching = true -- camera follows a target (false after STOP)
-local target: Player? = nil
-
-local function candidates(): { Player }
-	local list = {}
-	for _, p in Players:GetPlayers() do
-		if p ~= localPlayer and p:GetAttribute("InRound") == true then
-			local humanoid = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
-			if humanoid then
-				table.insert(list, p)
-			end
+local function keyHandler(dir: number)
+	return function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			UIKit.sound("UiClick")
+			cycle(dir)
 		end
+		return Enum.ContextActionResult.Sink
 	end
-	table.sort(list, function(a, b)
-		return a.UserId < b.UserId
-	end)
-	return list
-end
-
-local function ownHumanoid(): Humanoid?
-	local character = localPlayer.Character
-	return character and character:FindFirstChildOfClass("Humanoid")
-end
-
-local function applyCamera()
-	local camera = workspace.CurrentCamera
-	if not camera then
-		return
-	end
-	local subject: Instance? = nil
-	if active and watching and target then
-		subject = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
-	end
-	subject = subject or ownHumanoid()
-	if subject and camera.CameraSubject ~= subject then
-		camera.CameraSubject = subject
-	end
-end
-
-local function refreshLabels()
-	if not watching then
-		title.Text = "SPECTATING"
-		targetName.Text = "PAUSED"
-		stopButton.Text = "WATCH"
-		stopButton.BackgroundColor3 = C.Green
-	elseif target then
-		title.Text = "SPECTATING"
-		targetName.Text = target.DisplayName
-		stopButton.Text = "STOP"
-		stopButton.BackgroundColor3 = C.Red
-	else
-		title.Text = "SPECTATING"
-		targetName.Text = "Nobody left..."
-		stopButton.Text = "STOP"
-		stopButton.BackgroundColor3 = C.Red
-	end
-	local many = #candidates() > 1
-	prevButton.Visible = many and watching
-	nextButton.Visible = many and watching
-end
-
-local function cycle(step: number)
-	local list = candidates()
-	if #list == 0 then
-		target = nil
-	else
-		local index = target and table.find(list, target) or 0
-		if index == 0 and step < 0 then
-			index = 1
-		end
-		target = list[(index - 1 + step) % #list + 1]
-	end
-	refreshLabels()
-	applyCamera()
-end
-
--- Make sure the current target is still valid (left the round -> next one).
-local function validate()
-	if not active then
-		return
-	end
-	local list = candidates()
-	if not target or not table.find(list, target) then
-		target = list[1]
-	end
-	refreshLabels()
-	applyCamera()
 end
 
 local function setActive(on: boolean)
@@ -239,64 +68,90 @@ local function setActive(on: boolean)
 		return
 	end
 	active = on
+	serial += 1
+	local mine = serial
 	if on then
-		watching = true
-		target = nil
-		validate()
-		bar.Visible = true
-		bar.Position = HIDDEN_POS
-		TweenService:Create(bar, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-			Position = SHOWN_POS,
-		}):Play()
+		bar.show()
+		ContextActionService:BindActionAtPriority(
+			"PD_SpectatePrev",
+			keyHandler(-1),
+			false,
+			KEY_PRIORITY,
+			Enum.KeyCode.Q,
+			Enum.KeyCode.ButtonL1
+		)
+		ContextActionService:BindActionAtPriority(
+			"PD_SpectateNext",
+			keyHandler(1),
+			false,
+			KEY_PRIORITY,
+			Enum.KeyCode.E,
+			Enum.KeyCode.ButtonR1
+		)
+		local beat = RunService.Heartbeat:Connect(function()
+			bar.update()
+		end)
+		task.spawn(function()
+			while mine == serial do
+				bar.setTarget(Follow.refresh())
+				task.wait(REFRESH)
+			end
+			beat:Disconnect()
+		end)
 	else
-		target = nil
-		bar.Visible = false
-		bar.Position = HIDDEN_POS
-		applyCamera()
+		ContextActionService:UnbindAction("PD_SpectatePrev")
+		ContextActionService:UnbindAction("PD_SpectateNext")
+		bar.hide()
+		Follow.stop()
 	end
 end
 
-prevButton.Activated:Connect(function()
-	cycle(-1)
-end)
-nextButton.Activated:Connect(function()
-	cycle(1)
-end)
-stopButton.Activated:Connect(function()
-	watching = not watching
-	if watching then
-		validate()
-	else
-		refreshLabels()
-		applyCamera()
-	end
-end)
+-- ===== Watch tile (lobby players during a Round) =====
+local watch = UIKit.Dock.add("Right", {
+	id = "Watch",
+	order = 5,
+	icon = "spectate_eye",
+	label = "Watch",
+	color = "Red",
+	onClick = function()
+		stopped = false
+		Remotes.fire("Core_DeathChoice", "spectate")
+	end,
+})
+Widgets.fillHitArea(watch.button)
+watch.setTimer("LIVE")
+watch.button.Visible = false
 
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed or not active or not watching then
+sync = function()
+	local inRound = State.flag("InRound")
+	local solo = State.flag("InSolo")
+	local spectating = State.flag("Spectating")
+	setActive(spectating and not stopped and not inRound and not solo)
+
+	local wantWatch = State.phase() == "Round" and not inRound and not solo and (not spectating or stopped)
+	if watch.button.Visible ~= wantWatch then
+		watch.button.Visible = wantWatch
+		if wantWatch then
+			Widgets.popButton(watch)
+		end
+	end
+end
+
+-- a new Spectating value from the server always wins over the local LOBBY shortcut
+player:GetAttributeChangedSignal("Spectating"):Connect(function()
+	stopped = false
+end)
+State.watch({ "Phase" }, { "Spectating", "InRound", "Eliminated", "InSolo" }, sync)
+
+-- the lobby's LIVE TV (Lobby model: ProximityPrompt with PD_Action "Watch")
+ProximityPromptService.PromptTriggered:Connect(function(prompt, who)
+	if who ~= player or prompt:GetAttribute("PD_Action") ~= "Watch" then
 		return
 	end
-	if input.KeyCode == Enum.KeyCode.Q then
-		cycle(-1)
-	elseif input.KeyCode == Enum.KeyCode.E then
-		cycle(1)
-	end
-end)
-
-localPlayer:GetAttributeChangedSignal("Spectating"):Connect(function()
-	setActive(localPlayer:GetAttribute("Spectating") == true)
-end)
-localPlayer.CharacterAdded:Connect(function()
-	task.defer(applyCamera)
-end)
-setActive(localPlayer:GetAttribute("Spectating") == true)
-
--- Light polling keeps the target valid as players get knocked out or leave.
-task.spawn(function()
-	while true do
-		task.wait(0.3)
-		if active then
-			validate()
-		end
+	if State.phase() == "Round" and not State.flag("InRound") then
+		stopped = false
+		Remotes.fire("Core_DeathChoice", "spectate")
+	else
+		UIKit.toast("Nothing live yet!", nil, "spectate_eye")
 	end
 end)
