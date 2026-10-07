@@ -1,4 +1,9 @@
--- Party Dash Core: turns a finished main round into stats, banners, confetti and Signals.RoundFinished.
+--[[
+Party Dash Core: turns a finished main round into stats, the result line, celebrations and Signals.RoundFinished.
+The headline (GameState ResultText) is shown by the HUD's results card only: it is never sent as a big announcement
+(that used to print it twice). Winners get their own "YOU WIN!" banner and confetti.
+]]
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -14,16 +19,30 @@ local PlayerSetup = require(script.Parent.PlayerSetup)
 
 local Results = {}
 
-local function seconds(s: number): string
-	return ("%.1fs"):format(s)
-end
-
 local function names(players: { Player }): string
 	local list = {}
 	for _, p in players do
 		table.insert(list, p.DisplayName)
 	end
 	return table.concat(list, " & ")
+end
+
+local function headline(r: { [string]: any }, winners: { Player }): string
+	local participants: { Player } = r.participants
+	if #winners == 1 then
+		return string.upper(winners[1].DisplayName) .. " WINS!"
+	elseif #winners == 2 then
+		return string.upper(names(winners)) .. " WIN!"
+	elseif #winners > 2 then
+		return ("%d WINNERS!"):format(#winners)
+	elseif #participants == 1 then
+		local p = participants[1]
+		if r.scores then
+			return ("%s SCORED %d!"):format(string.upper(p.DisplayName), r.scores[p] or 0)
+		end
+		return ("%s LASTED %ds!"):format(string.upper(p.DisplayName), math.floor(r.survived[p] or r.duration))
+	end
+	return if r.scores then "NOBODY SCORED!" else "NOBODY SURVIVED!"
 end
 
 -- info = { roundNumber, minigameId, modifierId?, displayName }
@@ -34,7 +53,7 @@ function Results.apply(ctx: any, info: { [string]: any })
 	-- A lone player can't "win" a round (no farming), but still gets a friendly result line.
 	if #participants >= 2 then
 		for _, p in r.winners do
-			if p.Parent then
+			if p.Parent == Players then
 				table.insert(winners, p)
 			end
 		end
@@ -57,46 +76,11 @@ function Results.apply(ctx: any, info: { [string]: any })
 	end
 	if #participants >= 2 then
 		for _, p in participants do
-			local streak = p.Parent and not isWinner[p] and PlayerSetup.stat(p, "Streak")
+			local streak = p.Parent == Players and not isWinner[p] and PlayerSetup.stat(p, "Streak")
 			if streak then
 				streak.Value = 0
 			end
 		end
-	end
-
-	-- Result text.
-	local text, sub
-	local color = Theme.Colors.Yellow
-	local scores = r.scores
-	if #winners == 1 then
-		local w = winners[1]
-		text = string.upper(w.DisplayName) .. " WINS!"
-		local streak = PlayerSetup.stat(w, "Streak")
-		if scores then
-			sub = ("%d points"):format(scores[w] or 0)
-		elseif streak and streak.Value >= 2 then
-			sub = ("WIN STREAK x%d!"):format(streak.Value)
-		else
-			sub = ("Survived %s"):format(seconds(r.survived[w] or r.duration))
-		end
-	elseif #winners == 2 then
-		text = string.upper(names(winners)) .. " WIN!"
-	elseif #winners > 2 then
-		text = ("%d WINNERS!"):format(#winners)
-		sub = names(winners)
-	elseif #participants == 1 then
-		local p = participants[1]
-		if scores then
-			text = ("%s SCORED %d!"):format(string.upper(p.DisplayName), scores[p] or 0)
-			sub = "Bring friends to battle for the win!"
-		else
-			text = "NOBODY SURVIVED!"
-			sub = ("%s lasted %s"):format(p.DisplayName, seconds(r.survived[p] or r.duration))
-			color = Theme.Colors.Red
-		end
-	else
-		text = if scores then "NOBODY SCORED!" else "NOBODY SURVIVED!"
-		color = Theme.Colors.Red
 	end
 
 	local ids = {}
@@ -104,13 +88,31 @@ function Results.apply(ctx: any, info: { [string]: any })
 		table.insert(ids, tostring(p.UserId))
 	end
 	GameState.write("WinnersCsv", table.concat(ids, ","))
-	GameState.write("ResultText", text)
+	GameState.write("ResultText", headline(r, winners))
 
-	local audience = Places.audience()
-	Announce.big(audience, text, sub, color)
+	-- Celebrate: a personal banner for each winner, feed lines for everyone.
+	local everyone = Places.audience()
+	local gameName = info.displayName or info.minigameId
 	for _, p in winners do
-		Announce.feed(audience, ("%s won %s!"):format(p.DisplayName, info.displayName or info.minigameId))
+		local streak = PlayerSetup.stat(p, "Streak")
+		local streakValue = streak and streak.Value or 0
+		Announce.big(
+			p,
+			"YOU WIN!",
+			if streakValue >= 2 then ("WIN STREAK x%d!"):format(streakValue) else nil,
+			Theme.Colors.Gold
+		)
 		Fx.confetti(p)
+		if streakValue >= 2 then
+			Announce.feed(everyone, ("%s: %d WIN STREAK!"):format(p.DisplayName, streakValue))
+		else
+			Announce.feed(everyone, ("%s won %s!"):format(p.DisplayName, gameName))
+		end
+	end
+	local mvp: Player? = r.mvp
+	if mvp and mvp.Parent == Players and #participants >= 2 then
+		local kos = r.kos[mvp] or 0
+		Announce.feed(everyone, ("MVP: %s (%d KO%s)"):format(mvp.DisplayName, kos, if kos == 1 then "" else "s"))
 	end
 
 	Signals.RoundFinished:Fire({
@@ -122,7 +124,9 @@ function Results.apply(ctx: any, info: { [string]: any })
 		winners = winners,
 		placements = r.placements,
 		survived = r.survived,
-		scores = scores,
+		scores = r.scores,
+		kos = r.kos,
+		mvp = r.mvp,
 	})
 	return r
 end

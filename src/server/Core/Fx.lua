@@ -1,10 +1,19 @@
--- Party Dash Core: server-side celebration effects (replicated to everyone).
+-- Party Dash Core: server-side effects.
+--   Fx.send(kind, position, targets)  -- remote Core_Fx: "splash" | "boom" | "poof" | "ko", drawn by src/client/Core
+--   Fx.confetti(player)               -- winner confetti fountain (replicated, cleaned by Debris)
 local Debris = game:GetService("Debris")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Theme = require(ReplicatedStorage:WaitForChild("Shared").Theme)
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Net = require(Shared.Net)
+local Theme = require(Shared.Theme)
 
 local Fx = {}
+
+Fx.KINDS = { splash = true, boom = true, poof = true, ko = true }
+
+local remote = Net.event("Core_Fx") -- created at require time so clients never wait for it
 
 local CONFETTI_COLORS = {
 	Theme.Colors.Yellow,
@@ -14,6 +23,15 @@ local CONFETTI_COLORS = {
 	Theme.Colors.Purple,
 	Theme.Colors.Orange,
 }
+
+function Fx.send(kind: string, position: Vector3, targets: { Player })
+	assert(Fx.KINDS[kind], "Fx.send: unknown kind " .. tostring(kind))
+	for _, p in targets do
+		if p.Parent == Players then
+			remote:FireClient(p, kind, position)
+		end
+	end
+end
 
 -- A short confetti fountain above a player's head.
 function Fx.confetti(player: Player)

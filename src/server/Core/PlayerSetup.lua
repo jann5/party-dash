@@ -1,10 +1,23 @@
--- Party Dash Core: per-player setup (leaderstats, attributes) and placing every new character.
+-- Party Dash Core: per-player setup (leaderstats, Core attributes) and placing every new character in the lobby.
 local Players = game:GetService("Players")
 
 local Places = require(script.Parent.Places)
 local State = require(script.Parent.State)
 
 local PlayerSetup = {}
+
+-- Core-owned Player attributes and their "nothing going on" values (docs/ARCHITECTURE.md attribute table).
+PlayerSetup.DEFAULTS = {
+	InRound = false,
+	Eliminated = false,
+	Spectating = false,
+	Queued = false,
+	Vote = "",
+	ReviveUntil = 0,
+	KOs = 0,
+	LastHitBy = 0,
+	LastHitAt = 0,
+}
 
 local function intValue(parent: Instance, name: string)
 	if not parent:FindFirstChild(name) then
@@ -38,8 +51,9 @@ local function onPlayerAdded(player: Player)
 	end
 	intValue(stats, "Wins")
 	intValue(stats, "Streak")
-	player:SetAttribute("InRound", false)
-	player:SetAttribute("Spectating", State.arenaActive)
+	for name, value in PlayerSetup.DEFAULTS do
+		player:SetAttribute(name, value)
+	end
 
 	player.CharacterAdded:Connect(function(character)
 		onCharacter(player, character)

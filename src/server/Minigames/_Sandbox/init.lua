@@ -1,44 +1,36 @@
 --[[
-Party Dash: _Sandbox, a tiny survival minigame used to test Core's round loop (hidden from the roulette).
-A round candy platform; colorful balls drop from the sky (a warning ring shows where), faster and faster
-with ctx.intensity(). A ball that touches you knocks you back. Last one on the platform wins.
-Also a reference for minigame authors: no module-level mutable state, everything relative to ctx.center.
+Party Dash: _Sandbox, a tiny survival minigame used to test Core's round loop (hidden from the vote).
+A square checker court over a stone cliff in the sea; colorful balls drop from the sky (a warning disc shows where),
+faster and faster with ctx.intensity(). A ball that touches you knocks you back. Last one on the court wins.
+Also a reference for minigame authors: no module-level mutable state, everything relative to ctx.center, the map is
+built with Shared.Art, and it tolerates revived players (no per-player state that assumes "once out, always out").
 ]]
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
-local Theme = require(ReplicatedStorage:WaitForChild("Shared").Theme)
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Art = require(Shared.Art)
+local Config = require(Shared.Config)
+local Theme = require(Shared.Theme)
 
-local RADIUS = 40
+local HALF = 32 -- the court is 64 x 64 studs
 local DROP_HEIGHT = 45
 local WARNING_TIME = 0.75
 local BALL_LIFETIME = 7
 local MAX_BALLS = 40
 local HIT_COOLDOWN = 0.6
 
-local function part(parent: Instance, props: { [string]: any }): Part
-	local p = Instance.new("Part")
-	p.Anchored = true
-	p.TopSurface = Enum.SurfaceType.Smooth
-	p.BottomSurface = Enum.SurfaceType.Smooth
-	p.Material = Enum.Material.SmoothPlastic
-	for k, v in props do
-		(p :: any)[k] = v
-	end
-	p.Parent = parent
-	return p
-end
+local FLOOR = Color3.fromRGB(226, 104, 52) -- warm coral: reads against both the sea and the sky
+local CORNER_COLORS = { Theme.Colors.Red, Theme.Colors.Blue, Theme.Colors.Green, Theme.Colors.Yellow }
 
--- Vertical cylinder with its top face at `top`.
-local function disc(parent: Instance, name: string, top: Vector3, height: number, radius: number, color: Color3): Part
-	return part(parent, {
-		Name = name,
-		Shape = Enum.PartType.Cylinder,
-		Size = Vector3.new(height, radius * 2, radius * 2),
-		CFrame = CFrame.new(top - Vector3.new(0, height / 2, 0)) * CFrame.Angles(0, 0, math.pi / 2),
-		Color = color,
+local function decor(parent: Instance, name: string, size: Vector3, cf: CFrame, recipe: string)
+	return Art.block(parent, name, size, cf, recipe, {
+		collide = false,
+		canQuery = false,
+		canTouch = false,
+		castShadow = false,
 	})
 end
 
@@ -46,30 +38,30 @@ local function buildMap(center: CFrame): Model
 	local map = Instance.new("Model")
 	map.Name = "SandboxArena"
 	local o = center.Position
-	local C = Theme.Colors
 
-	-- Target-style candy platform: white rim, then colored rings (each a hair higher to avoid z-fighting).
-	disc(map, "Platform", o, 3, RADIUS, C.White)
-	disc(map, "Ring1", o + Vector3.new(0, 0.02, 0), 0.5, RADIUS - 3, C.Cyan)
-	disc(map, "Ring2", o + Vector3.new(0, 0.04, 0), 0.5, RADIUS - 13, C.Pink)
-	disc(map, "Ring3", o + Vector3.new(0, 0.06, 0), 0.5, RADIUS - 23, C.Yellow)
-	disc(map, "Bullseye", o + Vector3.new(0, 0.08, 0), 0.5, 6, C.Purple)
-	-- Layered underside.
-	disc(map, "Under1", o - Vector3.new(0, 3, 0), 5, RADIUS - 4, C.Purple)
-	disc(map, "Under2", o - Vector3.new(0, 8, 0), 5, RADIUS - 14, C.Blue)
-	disc(map, "Under3", o - Vector3.new(0, 13, 0), 5, RADIUS - 26, C.Cyan)
-	-- Rim bumpers (decorative).
-	for i = 0, 23 do
-		local a = i / 24 * math.pi * 2
-		local bead = part(map, {
-			Name = "Bead",
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.one * 2.2,
-			CFrame = CFrame.new(o + Vector3.new(math.cos(a) * (RADIUS - 1), 0.6, math.sin(a) * (RADIUS - 1))),
-			Color = if i % 2 == 0 then C.Yellow else C.Pink,
-			CanCollide = false,
-		})
-		bead.CanQuery = false
+	-- Court + a stone cliff down into the sea (non-collidable below the floor: no ledge to stand on).
+	local floor = Art.block(
+		map,
+		"Floor",
+		Vector3.new(HALF * 2, 2, HALF * 2),
+		CFrame.new(o - Vector3.new(0, 1, 0)),
+		"checker_pad",
+		{ color = FLOOR }
+	)
+	Art.cliffUnder(map, floor, o.Y - Config.SEA_DROP, "stone")
+
+	-- Hazard stripes flush on the rim (decoration only, so nobody trips on them).
+	local rimY = o.Y + 0.06
+	local long = HALF * 2
+	decor(map, "RimN", Vector3.new(long, 0.1, 2), CFrame.new(o.X, rimY, o.Z + HALF - 1), "hazard_trim")
+	decor(map, "RimS", Vector3.new(long, 0.1, 2), CFrame.new(o.X, rimY, o.Z - HALF + 1), "hazard_trim")
+	decor(map, "RimE", Vector3.new(2, 0.1, long - 4), CFrame.new(o.X + HALF - 1, rimY, o.Z), "hazard_trim")
+	decor(map, "RimW", Vector3.new(2, 0.1, long - 4), CFrame.new(o.X - HALF + 1, rimY, o.Z), "hazard_trim")
+
+	-- Four toy blocks in the corners: something to hop on while dodging.
+	for i, corner in { Vector3.new(1, 0, 1), Vector3.new(-1, 0, 1), Vector3.new(-1, 0, -1), Vector3.new(1, 0, -1) } do
+		local pos = o + corner * (HALF - 6) + Vector3.new(0, 2, 0)
+		Art.block(map, "ToyBlock", Vector3.new(4, 4, 4), CFrame.new(pos), "toy_block", { color = CORNER_COLORS[i] })
 	end
 
 	local spawns = Instance.new("Folder")
@@ -77,15 +69,16 @@ local function buildMap(center: CFrame): Model
 	for i = 1, 12 do
 		local a = (i - 1) / 12 * math.pi * 2
 		local pos = o + Vector3.new(math.cos(a) * 16, 0.5, math.sin(a) * 16)
-		part(spawns, {
-			Name = ("Spawn%02d"):format(i),
-			Size = Vector3.new(4, 1, 4),
-			CFrame = CFrame.lookAt(pos, Vector3.new(o.X, pos.Y, o.Z)),
-			Transparency = 1,
-			CanCollide = false,
-			CanQuery = false,
-			CanTouch = false,
-		})
+		local spawnPart = Instance.new("Part")
+		spawnPart.Name = ("Spawn%02d"):format(i)
+		spawnPart.Size = Vector3.new(4, 1, 4)
+		spawnPart.CFrame = CFrame.lookAt(pos, Vector3.new(o.X, pos.Y, o.Z))
+		spawnPart.Anchored = true
+		spawnPart.Transparency = 1
+		spawnPart.CanCollide = false
+		spawnPart.CanQuery = false
+		spawnPart.CanTouch = false
+		spawnPart.Parent = spawns
 	end
 	spawns.Parent = map
 
@@ -98,10 +91,12 @@ end
 local definition = {
 	id = "_Sandbox",
 	displayName = "BALL DROP",
-	rules = "Dodge the falling balls and stay on the platform!",
+	rules = "Dodge the falling balls and stay on the court!",
 	keys = { "Jump", "Dash", "Slide" },
 	kind = "survival",
 	soloCapable = true,
+	icon = "mg_random",
+	color = Theme.Colors.Orange,
 }
 
 function definition.create(ctx)
@@ -113,6 +108,10 @@ function definition.create(ctx)
 	local balls: { [BasePart]: { [Player]: number } } = {} -- ball -> last hit time per player
 	local ballCount = 0
 
+	local function onCourt(pos: Vector3, margin: number): boolean
+		return math.abs(pos.X - origin.X) <= HALF - margin and math.abs(pos.Z - origin.Z) <= HALF - margin
+	end
+
 	local function randomTarget(): Vector3
 		local alive = ctx.players()
 		-- Aim a growing share of the balls at players so nobody can just stand still.
@@ -123,14 +122,13 @@ function definition.create(ctx)
 			if root then
 				local jitter = Vector3.new(rng:NextNumber(-4, 4), 0, rng:NextNumber(-4, 4))
 				local flat = Vector3.new(root.Position.X, origin.Y, root.Position.Z) + jitter
-				if (flat - origin).Magnitude < RADIUS - 2 then
+				if onCourt(flat, 2) then
 					return flat
 				end
 			end
 		end
-		local a = rng:NextNumber(0, math.pi * 2)
-		local d = math.sqrt(rng:NextNumber()) * (RADIUS - 3)
-		return origin + Vector3.new(math.cos(a) * d, 0, math.sin(a) * d)
+		local reach = HALF - 3
+		return origin + Vector3.new(rng:NextNumber(-reach, reach), 0, rng:NextNumber(-reach, reach))
 	end
 
 	local function dropBall()
@@ -141,20 +139,21 @@ function definition.create(ctx)
 		local size = rng:NextNumber(4.5, 7.5)
 		local color = Theme.MapPalette[rng:NextInteger(1, #Theme.MapPalette)]
 
-		-- Telegraph: a flat ring that grows where the ball will land.
-		local ring = part(hazards, {
-			Name = "Warning",
-			Shape = Enum.PartType.Cylinder,
-			Size = Vector3.new(0.2, 1, 1),
-			CFrame = CFrame.new(target + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.pi / 2),
-			Color = color,
-			Material = Enum.Material.Neon,
-			Transparency = 0.35,
-			CanCollide = false,
-			CanQuery = false,
-			CanTouch = false,
-			CastShadow = false,
-		})
+		-- Telegraph: a flat disc that grows where the ball will land.
+		local ring = Instance.new("Part")
+		ring.Name = "Warning"
+		ring.Shape = Enum.PartType.Cylinder
+		ring.Size = Vector3.new(0.2, 1, 1)
+		ring.CFrame = CFrame.new(target + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+		ring.Color = color
+		ring.Material = Enum.Material.Neon
+		ring.Transparency = 0.35
+		ring.Anchored = true
+		ring.CanCollide = false
+		ring.CanQuery = false
+		ring.CanTouch = false
+		ring.CastShadow = false
+		ring.Parent = hazards
 		TweenService:Create(ring, TweenInfo.new(WARNING_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Size = Vector3.new(0.2, size + 2, size + 2),
 		}):Play()
@@ -244,7 +243,16 @@ function definition.create(ctx)
 		running = false
 	end
 
-	-- Unused in this tiny minigame, but shows that ctx.trove also owns player-related connections.
+	-- A revived player gets a clean slate (no hit cooldowns) and lands near the middle.
+	function session.onRevive(_self, player: Player): CFrame?
+		for _, hits in balls do
+			hits[player] = nil
+		end
+		local a = rng:NextNumber(0, math.pi * 2)
+		local pos = origin + Vector3.new(math.cos(a) * 8, 0, math.sin(a) * 8)
+		return CFrame.lookAt(pos, Vector3.new(origin.X, pos.Y, origin.Z))
+	end
+
 	ctx.trove:connect(Players.PlayerRemoving, function(p: Player)
 		for _, hits in balls do
 			hits[p] = nil
