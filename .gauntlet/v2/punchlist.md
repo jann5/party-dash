@@ -25,4 +25,4 @@ Run stopped by the owner on 2026-10-07 ~08:00 before the wave-1 merge. Nothing f
 - V2 Studio test: the studio_pull sync was denied once by the permission classifier ("Irreversible Local Destruction");
   tools/studio_pull.luau now archives instead of destroying (0f71537). V2 code passed static review on attempt 2.
 - V6 attempt-1 Studio failure was caused by a lead contract bug in Shared.Audio (fixed in 31f0ca7).
-- Wave 2 script ready (not launched): scratchpad wave2.js (specs for V7-V13).
+- Wave 2 workflow ready (not launched): .gauntlet/v2/wave2-workflow.js (specs for V7-V13; set WAVE_BASE first).
