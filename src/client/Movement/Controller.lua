@@ -1,18 +1,27 @@
--- Local player input + motion for DASH and SLIDE.
--- The client owns its character's physics, so the motion happens here (a LinearVelocity on the root),
--- then the server is told through Movement_Dash / Movement_Slide and publishes the trusted attributes.
+-- Local player input + motion for DASH and SLIDE (plus the jump assist hook-up).
+-- The client owns its character's physics, so the motion happens here (a LinearVelocity on the root), then the server
+-- is told through Movement_Dash(t) / Movement_Slide(active, t) and publishes the trusted attributes.
+--   Dash   LeftShift / RightShift / Q / gamepad X / touch button: a 16-stud burst (Config.DASH_*), works once in the
+--          air without killing the jump arc, eases out through a short momentum tail.
+--   Slide  C / LeftControl / gamepad B / touch button: football slide tackle on the ground, fast start that eases
+--          out over Config.SLIDE_DURATION, a little steering, ends on time / jump (long jump) / leaving the ground /
+--          hitting a wall / dash. Cooldown Config.SLIDE_COOLDOWN after it ends, no bar anywhere.
+--   A dash or slide pressed up to Stats.INPUT_BUFFER early still fires; anything else is ignored.
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local GameState = require(Shared.GameState)
 local Net = require(Shared.Net)
-local Assets = require(Shared.Movement.Assets)
+local Body = require(Shared.Movement.Body)
+local CameraFx = require(Shared.Movement.CameraFx)
 local Stats = require(Shared.Movement.Stats)
 
+local JumpAssist = require(script.Parent.JumpAssist)
 local Rigs = require(script.Parent.Rigs)
 local State = require(script.Parent.State)
 
@@ -26,18 +35,26 @@ local player = Players.LocalPlayer
 -- so peak = distance / (duration * PROFILE_AREA) covers exactly the dash distance.
 local DASH_PROFILE_DROP = 0.55
 local DASH_PROFILE_AREA = 1 - DASH_PROFILE_DROP / 3
-local AIR_DASH_RISE = 2 -- slight upward drift during an air dash (it ignores gravity)
-local DASH_EXIT_GROUND = 1.05 -- * WalkSpeed carried out of a ground dash
-local DASH_EXIT_AIR = 1.2
+local AIR_DASH_HOP = 6 -- an air dash never kills the jump: vertical speed becomes at least this
+local DASH_TAIL_TIME = 0.15
+local DASH_TAIL_START = 1.35 -- x WalkSpeed when the exit tail begins
+local DASH_FOV_KICK = 6
+local DASH_FOV_TIME = 0.25
 
-local SLIDE_BOOST = 22 -- added to the entry speed
-local SLIDE_MAX_SPEED = 48
-local SLIDE_END_SPEED = 0.8 -- * WalkSpeed at the end of the slide
-local SLIDE_STEER = 2.4 -- radians per second of steering while sliding
-local SLIDE_JUMP_CAP = 36 -- horizontal speed kept when jumping out of a slide
-local SLIDE_BUFFER = 0.22 -- a slide pressed in the air / during a dash starts this long after
+local SLIDE_BOOST = 20 -- added to the entry speed
+local SLIDE_MAX_SPEED = 44
+local SLIDE_END_SPEED = 0.9 -- x WalkSpeed at the end of the slide
+local SLIDE_STEER_EARLY = 3.0 -- rad/s during the first 40% of the slide
+local SLIDE_STEER_LATE = 1.6
+local SLIDE_AIR_END = 0.12 -- airborne this long ends the slide
+local SLIDE_BLOCK_RATIO = 0.35 -- moving slower than this share of the commanded speed...
+local SLIDE_BLOCK_TIME = 0.1 -- ...for this long = slid into a wall
+local LONG_JUMP_CAP = 36 -- horizontal speed kept when jumping out of a slide
+local LONG_JUMP_TIME = 0.45
+local TAIL_STEER = 3.5
+local TAIL_PULL_BACK = -0.3 -- MoveDirection . tail direction below this cancels the tail
 
-local MOVER_FORCE = 1e7
+local MOVER_ACCEL = 9000 -- MaxForce = AssemblyMass * this (snappy without tunnelling through thin walls)
 local ACTION_PRIORITY = Enum.ContextActionPriority.High.Value + 50
 
 local BLOCKING_STATES = {
@@ -51,7 +68,11 @@ local BLOCKING_STATES = {
 
 local current: Rig? = nil
 local mover: LinearVelocity? = nil
-local slideTrack: AnimationTrack? = nil
+local facing: AlignOrientation? = nil
+local floorParams = RaycastParams.new()
+floorParams.FilterType = Enum.RaycastFilterType.Exclude
+floorParams.RespectCanCollide = true
+
 local dashRemote: RemoteEvent
 local slideRemote: RemoteEvent
 
@@ -61,6 +82,7 @@ local dash = {
 	dir = Vector3.new(0, 0, -1),
 	peak = 0,
 	grounded = true,
+	endsAt = 0,
 }
 local slide = {
 	active = false,
@@ -68,9 +90,27 @@ local slide = {
 	dir = Vector3.new(0, 0, -1),
 	speed0 = 0,
 	speedEnd = 0,
+	air = 0,
+	blocked = 0,
 	prevAutoRotate = true,
 }
+-- Momentum tail after a dash or a slide-jump: keeps (decaying) speed instead of stopping dead.
+local tail = {
+	active = false,
+	t = 0,
+	duration = 0,
+	dir = Vector3.new(0, 0, -1),
+	from = 0,
+	to = 0,
+	landEnds = false,
+}
 local slideBufferedUntil = 0
+local dashBufferedUntil = 0
+local dashReadyAnnounced = true
+
+local function serverNow(): number
+	return workspace:GetServerTimeNow()
+end
 
 local function flat(v: Vector3): Vector3?
 	local f = Vector3.new(v.X, 0, v.Z)
@@ -111,11 +151,6 @@ local function canAct(rig: Rig): boolean
 	return not frozenByRound()
 end
 
-local function faceDirection(root: BasePart, dir: Vector3)
-	local pos = root.Position
-	root.CFrame = CFrame.lookAt(pos, pos + dir)
-end
-
 local function rotateToward(from: Vector3, to: Vector3, maxAngle: number): Vector3
 	local angle = math.acos(math.clamp(from:Dot(to), -1, 1))
 	if angle <= maxAngle then
@@ -125,13 +160,99 @@ local function rotateToward(from: Vector3, to: Vector3, maxAngle: number): Vecto
 	return CFrame.Angles(0, sign * maxAngle, 0):VectorToWorldSpace(from)
 end
 
-local function setHorizontalVelocity(root: BasePart, horizontal: Vector3)
+-- The floor right under the character (nil in the air). A ray, not FloorMaterial: while the slide lowers the hips
+-- the root is still settling and FloorMaterial can flicker to Air.
+local function probeFloor(rig: Rig): RaycastResult?
+	local reach = Body.rootToFeet(rig.character, rig.humanoid, rig.root) + 1.5
+	return workspace:Raycast(rig.root.Position, Vector3.new(0, -reach, 0), floorParams)
+end
+
+-- Horizontal velocity of whatever we stand on (moving / spinning platforms carry the dash and the slide).
+local function floorVelocity(hit: RaycastResult?): Vector3
+	if not hit or not hit.Instance:IsA("BasePart") then
+		return Vector3.zero
+	end
+	local v = (hit.Instance :: BasePart):GetVelocityAtPosition(hit.Position)
+	return Vector3.new(v.X, 0, v.Z)
+end
+
+local function drive(rig: Rig, dir: Vector3, speed: number, floor: RaycastResult?)
+	if not mover then
+		return
+	end
+	local v = dir * speed + floorVelocity(if floor ~= nil then floor else probeFloor(rig))
+	mover.PlaneVelocity = Vector2.new(v.X, v.Z)
+	mover.MaxForce = rig.root.AssemblyMass * MOVER_ACCEL
+	mover.Enabled = true
+end
+
+local function releaseMover()
+	if mover and not dash.active and not slide.active and not tail.active then
+		mover.Enabled = false
+	end
+end
+
+local function face(dir: Vector3?)
+	if not facing then
+		return
+	end
+	if dir then
+		facing.CFrame = CFrame.lookAt(Vector3.zero, dir)
+		facing.Enabled = true
+	else
+		facing.Enabled = false
+	end
+end
+
+local function horizontalSpeed(root: BasePart): number
 	local v = root.AssemblyLinearVelocity
-	root.AssemblyLinearVelocity = Vector3.new(horizontal.X, v.Y, horizontal.Z)
+	return Vector3.new(v.X, 0, v.Z).Magnitude
+end
+
+---------------------------------------------------------------------------------------------------
+-- Momentum tail
+
+local function stopTail()
+	if tail.active then
+		tail.active = false
+		releaseMover()
+	end
+end
+
+local function startTail(dir: Vector3, from: number, to: number, duration: number, landEnds: boolean)
+	tail.active = true
+	tail.t = 0
+	tail.duration = duration
+	tail.dir = dir
+	tail.from = from
+	tail.to = to
+	tail.landEnds = landEnds
+end
+
+local function stepTail(rig: Rig, dt: number)
+	tail.t += dt
+	local want = flat(rig.humanoid.MoveDirection)
+	local grounded = isGrounded(rig)
+	if
+		tail.t >= tail.duration
+		or (tail.landEnds and grounded and tail.t > 0.08)
+		or (want and want:Dot(tail.dir) < TAIL_PULL_BACK)
+	then
+		stopTail()
+		return
+	end
+	if want then
+		tail.dir = rotateToward(tail.dir, want, TAIL_STEER * dt)
+	end
+	local u = tail.t / tail.duration
+	local speed = tail.from + (tail.to - tail.from) * (1 - (1 - u) * (1 - u))
+	drive(rig, tail.dir, speed)
 end
 
 ---------------------------------------------------------------------------------------------------
 -- Dash
+
+local endSlide: (Rig?, string) -> ()
 
 local function finishDash(rig: Rig?, natural: boolean)
 	if not dash.active then
@@ -139,17 +260,13 @@ local function finishDash(rig: Rig?, natural: boolean)
 	end
 	dash.active = false
 	State.dashing = false
-	if mover and not slide.active then
-		mover.Enabled = false
-	end
 	if natural and rig and rig.root.Parent then
-		local exit = rig.humanoid.WalkSpeed * (if dash.grounded then DASH_EXIT_GROUND else DASH_EXIT_AIR)
-		setHorizontalVelocity(rig.root, dash.dir * exit)
+		local walk = rig.humanoid.WalkSpeed
+		startTail(dash.dir, walk * DASH_TAIL_START, walk, DASH_TAIL_TIME, false)
 	end
+	releaseMover()
 	State.fire("DashEnd", rig)
 end
-
-local endSlide: (Rig?, string) -> ()
 
 local function startDash(rig: Rig)
 	local humanoid, root = rig.humanoid, rig.root
@@ -159,65 +276,64 @@ local function startDash(rig: Rig)
 	if slide.active then
 		endSlide(rig, "dash")
 	end
+	stopTail()
 	if not grounded then
 		State.airDashUsed = true
+		-- Plane mode keeps gravity, so the jump arc continues; give it a small hop instead of cutting it.
+		local v = root.AssemblyLinearVelocity
+		root.AssemblyLinearVelocity = Vector3.new(v.X, math.max(v.Y, AIR_DASH_HOP), v.Z)
 	end
 
 	local cooldown = Stats.dashCooldown(player)
 	State.dashCooldown = cooldown
 	State.dashReadyAt = now + cooldown
 	State.dashing = true
+	dashReadyAnnounced = false
+	dashBufferedUntil = 0
 
 	dash.active = true
 	dash.t = 0
 	dash.dir = dir
 	dash.grounded = grounded
+	dash.endsAt = now + Config.DASH_DURATION
 	dash.peak = Stats.dashDistance(player) / (Config.DASH_DURATION * DASH_PROFILE_AREA)
-
-	if mover then
-		if grounded then
-			-- Plane mode: horizontal speed is forced, gravity / ledges still work.
-			mover.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane
-			mover.PlaneVelocity = Vector2.new(dir.X, dir.Z) * dash.peak
-		else
-			-- Air dash: a flat burst that ignores gravity for its short duration.
-			mover.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
-			mover.VectorVelocity = dir * dash.peak + Vector3.new(0, AIR_DASH_RISE, 0)
-		end
-		mover.Enabled = true
-	end
+	drive(rig, dir, dash.peak)
 	if humanoid.AutoRotate then
-		faceDirection(root, dir)
+		local pos = root.Position
+		root.CFrame = CFrame.lookAt(pos, pos + dir)
 	end
 
-	dashRemote:FireServer()
+	CameraFx.fovKick(DASH_FOV_KICK, DASH_FOV_TIME)
+	dashRemote:FireServer(serverNow())
 	State.fire("Dash", rig, dir, grounded)
 end
 
 local function stepDash(rig: Rig, dt: number)
-	local duration = Config.DASH_DURATION
-	if dash.t >= duration then
+	if dash.t >= Config.DASH_DURATION then
 		finishDash(rig, true)
 		return
 	end
-	local t = math.clamp((dash.t + dt * 0.5) / duration, 0, 1)
+	local t = math.clamp((dash.t + dt * 0.5) / Config.DASH_DURATION, 0, 1)
 	dash.t += dt
-	local speed = dash.peak * (1 - DASH_PROFILE_DROP * t * t)
-	if mover then
-		if mover.VelocityConstraintMode == Enum.VelocityConstraintMode.Plane then
-			mover.PlaneVelocity = Vector2.new(dash.dir.X, dash.dir.Z) * speed
-		else
-			mover.VectorVelocity = dash.dir * speed + Vector3.new(0, AIR_DASH_RISE, 0)
-		end
-	end
+	drive(rig, dash.dir, dash.peak * (1 - DASH_PROFILE_DROP * t * t))
 end
 
-local function tryDash()
+function Controller.requestDash()
 	local rig = current
 	if not rig or not canAct(rig) or dash.active then
 		return
 	end
-	if os.clock() < State.dashReadyAt or (not isGrounded(rig) and State.airDashUsed) then
+	local now = os.clock()
+	local wait = State.dashReadyAt - now
+	if wait > 0 then
+		if wait <= Stats.INPUT_BUFFER then
+			dashBufferedUntil = State.dashReadyAt + 0.05
+		else
+			State.fire("DashDenied")
+		end
+		return
+	end
+	if not isGrounded(rig) and State.airDashUsed then
 		State.fire("DashDenied")
 		return
 	end
@@ -234,83 +350,50 @@ endSlide = function(rig: Rig?, reason: string)
 	slide.active = false
 	State.sliding = false
 	State.slideReadyAt = os.clock() + Stats.slideCooldown()
-	if mover and not dash.active then
-		mover.Enabled = false
-	end
-	if slideTrack then
-		slideTrack:Stop(0.18)
-	end
+	face(nil)
 	if rig and rig.humanoid.Parent then
 		rig.humanoid.AutoRotate = slide.prevAutoRotate
-		if rig.root.Parent then
-			local v = rig.root.AssemblyLinearVelocity
-			local horizontal = Vector3.new(v.X, 0, v.Z)
-			if reason == "jump" then
-				-- Slide-jump keeps (capped) momentum: a satisfying long jump.
-				if horizontal.Magnitude > SLIDE_JUMP_CAP then
-					setHorizontalVelocity(rig.root, horizontal.Unit * SLIDE_JUMP_CAP)
-				end
-			elseif reason == "time" then
-				setHorizontalVelocity(rig.root, slide.dir * math.max(rig.humanoid.WalkSpeed * 0.9, 1))
+		if rig.root.Parent and reason == "jump" then
+			-- Long jump: keep (capped) momentum through the air instead of losing it in a few frames.
+			local speed = math.min(horizontalSpeed(rig.root), LONG_JUMP_CAP)
+			local walk = rig.humanoid.WalkSpeed
+			if speed > walk then
+				startTail(slide.dir, speed, walk, LONG_JUMP_TIME, true)
 			end
 		end
 	end
-	if reason ~= "time" then
-		slideRemote:FireServer(false)
-	end
+	releaseMover()
+	slideRemote:FireServer(false, serverNow())
 	State.fire("SlideEnd", rig, reason)
-end
-
-local function loadSlideTrack(rig: Rig)
-	slideTrack = nil
-	if not rig.isR15 then
-		return
-	end
-	local animator = rig.humanoid:FindFirstChildOfClass("Animator") or rig.humanoid:WaitForChild("Animator", 5)
-	if not animator or not animator:IsA("Animator") or current ~= rig then
-		return
-	end
-	local animation = Instance.new("Animation")
-	animation.AnimationId = Assets.animationId(Assets.SlidePose)
-	local ok, track = pcall(function()
-		return animator:LoadAnimation(animation)
-	end)
-	if ok and track and current == rig then
-		track.Priority = Enum.AnimationPriority.Action
-		track.Looped = true
-		slideTrack = track
-	end
 end
 
 local function startSlide(rig: Rig)
 	local humanoid, root = rig.humanoid, rig.root
 	local dir = flat(humanoid.MoveDirection) or flat(root.CFrame.LookVector) or Vector3.new(0, 0, -1)
-	local v = root.AssemblyLinearVelocity
-	local entry = math.max(Vector3.new(v.X, 0, v.Z).Magnitude, humanoid.WalkSpeed)
+	local entry = math.max(horizontalSpeed(root), humanoid.WalkSpeed)
+	stopTail()
 
 	slide.active = true
 	slide.t = 0
 	slide.dir = dir
 	slide.speed0 = math.min(entry + SLIDE_BOOST, SLIDE_MAX_SPEED)
 	slide.speedEnd = humanoid.WalkSpeed * SLIDE_END_SPEED
+	slide.air = 0
+	slide.blocked = 0
 	slide.prevAutoRotate = humanoid.AutoRotate
 	State.sliding = true
 	slideBufferedUntil = 0
 
 	humanoid.AutoRotate = false
-	faceDirection(root, dir)
-	-- Snap down so the lowered body hugs the floor right away.
+	local pos = root.Position
+	root.CFrame = CFrame.lookAt(pos, pos + dir)
+	face(dir)
+	-- Hug the floor right away (the pose lowers the hips; do not float down).
+	local v = root.AssemblyLinearVelocity
 	root.AssemblyLinearVelocity = Vector3.new(v.X, math.min(v.Y, -6), v.Z)
-	if mover then
-		mover.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane
-		mover.PlaneVelocity = Vector2.new(dir.X, dir.Z) * slide.speed0
-		mover.Enabled = true
-	end
-	if slideTrack then
-		slideTrack:Play(0.08)
-	end
+	drive(rig, dir, slide.speed0)
 
-	slideRemote:FireServer(true)
+	slideRemote:FireServer(true, serverNow())
 	State.fire("SlideStart", rig, dir)
 end
 
@@ -321,28 +404,49 @@ local function stepSlide(rig: Rig, dt: number)
 		endSlide(rig, "time")
 		return
 	end
+	local floor = probeFloor(rig)
+	if floor or isGrounded(rig) then
+		slide.air = 0
+	else
+		slide.air += dt
+		if slide.air > SLIDE_AIR_END then
+			endSlide(rig, "air")
+			return
+		end
+	end
 	local want = flat(rig.humanoid.MoveDirection)
 	if want and want:Dot(slide.dir) > -0.7 then
-		slide.dir = rotateToward(slide.dir, want, SLIDE_STEER * dt)
+		local steer = if t < 0.4 then SLIDE_STEER_EARLY else SLIDE_STEER_LATE
+		slide.dir = rotateToward(slide.dir, want, steer * dt)
 	end
-	local speed = slide.speedEnd + (slide.speed0 - slide.speedEnd) * (1 - t) ^ 1.6
-	if mover then
-		mover.PlaneVelocity = Vector2.new(slide.dir.X, slide.dir.Z) * speed
+	-- Fast start that eases out: (1 - t)^2 from speed0 down to speedEnd.
+	local speed = slide.speedEnd + (slide.speed0 - slide.speedEnd) * (1 - t) * (1 - t)
+	if slide.t > 0.12 and horizontalSpeed(rig.root) < speed * SLIDE_BLOCK_RATIO then
+		slide.blocked += dt
+		if slide.blocked > SLIDE_BLOCK_TIME then
+			endSlide(rig, "blocked")
+			return
+		end
+	else
+		slide.blocked = 0
 	end
-	faceDirection(rig.root, slide.dir)
+	drive(rig, slide.dir, speed, floor)
+	face(slide.dir)
 end
 
-local function trySlide(fromBuffer: boolean?)
+function Controller.requestSlide()
 	local rig = current
 	if not rig or not canAct(rig) or slide.active then
 		return
 	end
 	local now = os.clock()
-	if dash.active or now < State.slideReadyAt or not isGrounded(rig) then
-		-- Remember the press briefly so a slide pressed just before landing still happens.
-		if not fromBuffer then
-			slideBufferedUntil = now + SLIDE_BUFFER
-		end
+	local wait = State.slideReadyAt - now
+	if wait > Stats.INPUT_BUFFER then
+		return -- cooling down: ignored (no bar, no nag)
+	end
+	if wait > 0 or dash.active or not isGrounded(rig) then
+		-- Remember the press briefly: it fires the moment the slide is ready / the dash ends / we land.
+		slideBufferedUntil = math.max(now + Stats.INPUT_BUFFER, if dash.active then dash.endsAt + 0.05 else 0)
 		return
 	end
 	startSlide(rig)
@@ -354,10 +458,13 @@ end
 local function cancelAll(rig: Rig?)
 	finishDash(rig, false)
 	endSlide(rig, "cancel")
+	stopTail()
 	slideBufferedUntil = 0
+	dashBufferedUntil = 0
 	if mover then
 		mover.Enabled = false
 	end
+	face(nil)
 end
 
 local function attach(rig: Rig)
@@ -367,9 +474,13 @@ local function attach(rig: Rig)
 	current = rig
 	dash.active = false
 	slide.active = false
-	State.dashing = false
-	State.sliding = false
-	State.airDashUsed = false
+	tail.active = false
+	slideBufferedUntil = 0
+	dashBufferedUntil = 0
+	dashReadyAnnounced = true
+	State.reset()
+	floorParams.FilterDescendantsInstances = { rig.character }
+	rig.humanoid.AutoJumpEnabled = false
 
 	local attachment = Instance.new("Attachment")
 	attachment.Name = "MovementAttachment"
@@ -383,20 +494,42 @@ local function attach(rig: Rig)
 	lv.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane
 	lv.PrimaryTangentAxis = Vector3.xAxis
 	lv.SecondaryTangentAxis = Vector3.zAxis
-	lv.MaxForce = MOVER_FORCE
+	lv.MaxForce = rig.root.AssemblyMass * MOVER_ACCEL
 	lv.Enabled = false
 	lv.Parent = rig.root
 	rig.trove:add(lv)
 	mover = lv
 
+	-- Keeps the root facing the slide direction while AutoRotate is off (no per-frame CFrame writes).
+	local align = Instance.new("AlignOrientation")
+	align.Name = "MovementFacing"
+	align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	align.Attachment0 = attachment
+	align.RigidityEnabled = false
+	align.Responsiveness = 60
+	align.MaxTorque = math.huge
+	align.Enabled = false
+	align.Parent = rig.root
+	rig.trove:add(align)
+	facing = align
+
+	JumpAssist.attach(rig)
+
 	rig.trove:connect(rig.humanoid.StateChanged, function(_, new)
-		if new == Enum.HumanoidStateType.Jumping and slide.active then
+		if new ~= Enum.HumanoidStateType.Jumping then
+			return
+		end
+		local longJump = slide.active
+		if longJump then
 			endSlide(rig, "jump")
 		end
+		State.fire("Jump", rig, longJump)
 	end)
 	rig.trove:connect(rig.character:GetAttributeChangedSignal("Stunned"), function()
 		if rig.character:GetAttribute("Stunned") == true then
 			cancelAll(rig)
+		else
+			State.airDashUsed = false -- recovering from a hit refunds the air dash (clutch save)
 		end
 	end)
 	rig.trove:add(function()
@@ -404,11 +537,9 @@ local function attach(rig: Rig)
 			cancelAll(rig)
 			current = nil
 			mover = nil
-			slideTrack = nil
+			facing = nil
 		end
 	end)
-
-	task.spawn(loadSlideTrack, rig)
 end
 
 local function step(dt: number)
@@ -416,35 +547,46 @@ local function step(dt: number)
 	if not rig or not rig.alive then
 		return
 	end
-	if (dash.active or slide.active) and not canAct(rig) then
+	local now = os.clock()
+	JumpAssist.step(rig, now)
+	if (dash.active or slide.active or tail.active) and not canAct(rig) then
 		cancelAll(rig)
 		return
 	end
 	if not dash.active and isGrounded(rig) then
 		State.airDashUsed = false
 	end
+	if not dashReadyAnnounced and now >= State.dashReadyAt then
+		dashReadyAnnounced = true
+		State.fire("DashReady")
+	end
+
 	if dash.active then
 		stepDash(rig, dt)
+	elseif tail.active then
+		stepTail(rig, dt)
 	end
 	if slide.active then
 		stepSlide(rig, dt)
-	elseif slideBufferedUntil > os.clock() and not dash.active then
-		trySlide(true)
+	elseif slideBufferedUntil >= now and not dash.active and now >= State.slideReadyAt and isGrounded(rig) then
+		Controller.requestSlide()
+	end
+	if dashBufferedUntil >= now and now >= State.dashReadyAt and not dash.active then
+		dashBufferedUntil = 0
+		Controller.requestDash()
 	end
 end
 
-local function onDashAction(_: string, inputState: Enum.UserInputState, _: InputObject)
-	if inputState == Enum.UserInputState.Begin then
-		tryDash()
+local function onAction(actionName: string, inputState: Enum.UserInputState, _: InputObject)
+	if inputState ~= Enum.UserInputState.Begin then
+		return Enum.ContextActionResult.Pass
 	end
-	-- Sink so LeftShift never toggles the default shift-lock while it means "dash".
-	return Enum.ContextActionResult.Sink
-end
-
-local function onSlideAction(_: string, inputState: Enum.UserInputState, _: InputObject)
-	if inputState == Enum.UserInputState.Begin then
-		trySlide(false)
+	if actionName == Stats.Action.Dash then
+		Controller.requestDash()
+	else
+		Controller.requestSlide()
 	end
+	-- Sink so the key never reaches anything else (e.g. Shift Lock) while it means "dash" / "slide".
 	return Enum.ContextActionResult.Sink
 end
 
@@ -452,31 +594,34 @@ function Controller.start()
 	dashRemote = Net.event(Stats.Remote.Dash)
 	slideRemote = Net.event(Stats.Remote.Slide)
 
-	-- The server tells us when it refused a dash so the cooldown bar shows the real wait.
+	-- The server tells us when it refused a dash so the dash indicator shows the real wait.
 	dashRemote.OnClientEvent:Connect(function(kind: any, remaining: any)
-		if kind == "Reject" and type(remaining) == "number" and remaining == remaining then
+		if kind == "Reject" and Stats.isFinite(remaining) then
 			local wait = math.clamp(remaining, 0, Config.DASH_COOLDOWN * 2)
 			State.dashCooldown = math.max(State.dashCooldown, wait)
 			State.dashReadyAt = math.max(State.dashReadyAt, os.clock() + wait)
+			dashReadyAnnounced = false
 		end
 	end)
 
+	-- No CAS touch buttons: the mobile pad (Shared.Movement.ActionButton) is driven by Hud.
 	ContextActionService:BindActionAtPriority(
 		Stats.Action.Dash,
-		onDashAction,
-		true,
+		onAction,
+		false,
 		ACTION_PRIORITY,
-		Enum.KeyCode.LeftShift
+		table.unpack(Stats.Keys.Dash)
 	)
 	ContextActionService:BindActionAtPriority(
 		Stats.Action.Slide,
-		onSlideAction,
-		true,
+		onAction,
+		false,
 		ACTION_PRIORITY,
-		Enum.KeyCode.C,
-		Enum.KeyCode.LeftControl
+		table.unpack(Stats.Keys.Slide)
 	)
 
+	JumpAssist.setCanAct(canAct)
+	UserInputService.JumpRequest:Connect(JumpAssist.request)
 	Rigs.onAdded(attach)
 	RunService.PreSimulation:Connect(step)
 end

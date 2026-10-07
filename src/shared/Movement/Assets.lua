@@ -1,9 +1,9 @@
--- Asset ids used by the movement system. All are public Roblox-owned assets (verified against the
--- Roblox catalog: creator "Roblox", asset type Animation / Audio), so they load in any experience.
+-- Asset ids used only by the movement system. Sounds are NOT here: they are played through Shared.Audio with the
+-- keys in Shared.Assets.Sounds ("Dash", "Slide", ...), so the settings menu can mute them.
 local Assets = {}
 
 -- Official "Cartoony" animation package (R15). Keys match the StringValue slots of the stock Animate
--- script; idle has two variants (main idle + look-around).
+-- script; idle has two variants (main idle + look-around). The slide is a procedural pose, not an animation.
 Assets.Animations = {
 	idle = { 742637544, 742638445 }, -- Cartoony_Idle, Cartoony_Lookaround
 	walk = { 742640026 }, -- Cartoony_Walk
@@ -13,15 +13,6 @@ Assets.Animations = {
 	climb = { 742636889 }, -- Cartoony_Climb
 	swim = { 742639220 }, -- Cartoony_Swim
 	swimidle = { 742639812 }, -- Cartoony_SwimIdle
-}
-
--- Arms-up pose layered over the procedural belly-slide tilt (reads as a "superman" dive).
-Assets.SlidePose = 742637151 -- Cartoony_Fall
-
-Assets.Sounds = {
-	Dash = "rbxassetid://15675024286", -- Roblox_UI_Whoosh_01
-	Slide = "rbxassetid://9118771226", -- Sand Slide 7 (SFX)
-	Ready = "rbxassetid://15675059323", -- Roblox_UI_Bright_Click
 }
 
 -- Particle textures shipped with every Roblox client.

@@ -109,7 +109,7 @@ local function apply(rig: Rig)
 	end
 
 	-- Restart Animate so it rebuilds its tables from the new ids. Only the stock base-layer tracks are
-	-- stopped (never Action tracks such as our slide pose or emotes).
+	-- stopped (never Action tracks such as emotes or tool animations).
 	animate.Enabled = false
 	local animator = rig.humanoid:FindFirstChildOfClass("Animator")
 	if animator then

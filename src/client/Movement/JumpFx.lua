@@ -1,6 +1,8 @@
--- Jump tricks (ported from the legacy JumpFx): every jump plays a random flip / spin with a rainbow
--- trail, and every landing shows a shock ring. Purely visual. The local client plays its own tricks and
--- tells the server through Net remote "Movement_JumpFx", which relays them to everyone else.
+-- Jump tricks (purely visual): every jump plays a quick flip or spin with a rainbow trail (a jump out of a slide,
+-- the long jump, always gets the front flip), and every landing shows a shock ring. The flip is a Pose layer on the
+-- root joint, never a physics change, so it cannot affect jump height or hit judging. No cartwheels: they would
+-- widen the body sideways. The local client plays its own tricks and tells the server through the UNRELIABLE remote
+-- "Movement_JumpFx", which relays them to everyone else.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -9,29 +11,26 @@ local Net = require(Shared.Net)
 local Stats = require(Shared.Movement.Stats)
 
 local Effects = require(script.Parent.Effects)
+local Pose = require(script.Parent.Pose)
 local Rigs = require(script.Parent.Rigs)
+local State = require(script.Parent.State)
 
 type Rig = Rigs.Rig
 
 local JumpFx = {}
 
 local TRICK_TIME = 0.45
+local LONG_JUMP_TRICK = 1
 -- Keep the count in sync with JUMP_TRICK_COUNT in the server Movement script.
 local TRICKS = {
-	{ axis = Vector3.new(1, 0, 0), angle = -2 * math.pi, weight = 40 }, -- front flip
-	{ axis = Vector3.new(0, 1, 0), angle = 4 * math.pi, weight = 25 }, -- double pirouette
-	{ axis = Vector3.new(1, 0, 0), angle = 2 * math.pi, weight = 20 }, -- back flip
-	{ axis = Vector3.new(0, 0, 1), angle = 2 * math.pi, weight = 15 }, -- side cartwheel
+	{ axis = Vector3.xAxis, angle = -2 * math.pi, weight = 40 }, -- front flip
+	{ axis = Vector3.yAxis, angle = 4 * math.pi, weight = 30 }, -- double pirouette
+	{ axis = Vector3.xAxis, angle = 2 * math.pi, weight = 30 }, -- back flip
 }
+local LAND_SPEED = 55 -- fall speed that gives a full-size landing ring
 
-local remote: RemoteEvent
-
--- The last Transform we wrote and the clean (trick-free) Transform it was based on, so we can tell
--- whether the Animator overwrote the joint this frame.
-local lastSet: { [Instance]: CFrame } = setmetatable({}, { __mode = "k" }) :: any
-local lastBase: { [Instance]: CFrame } = setmetatable({}, { __mode = "k" }) :: any
-local playing: { [Model]: {} } = setmetatable({}, { __mode = "k" }) :: any
-local trails: { [Model]: Trail } = setmetatable({}, { __mode = "k" }) :: any
+local remote: UnreliableRemoteEvent
+local trails: { [Rig]: Trail } = {}
 
 local function pickTrick(): number
 	local total = 0
@@ -48,27 +47,28 @@ local function pickTrick(): number
 	return 1
 end
 
--- R15 rigs may use Motor6D or AnimationConstraint joints; we never touch C0 here (Pose owns that),
--- we rotate the Transform instead, re-based so the spin happens around the HumanoidRootPart.
-local function rootJoint(character: Model): Instance?
-	local lower = character:FindFirstChild("LowerTorso")
-	if lower then
-		return lower:FindFirstChild("Root")
+local function playTrick(rig: Rig, index: number)
+	local trick = TRICKS[index]
+	if not trick or not rig.alive then
+		return
 	end
-	local hrp = character:FindFirstChild("HumanoidRootPart")
-	return hrp and hrp:FindFirstChild("RootJoint")
-end
-
-local function jointFrame(joint: any): CFrame
-	if joint:IsA("Motor6D") then
-		return joint.C0
+	Pose.trick(rig, trick.axis, trick.angle, TRICK_TIME)
+	if not Pose.isTricking(rig) then
+		return -- sliding / stunned: no trick
 	end
-	return joint.Attachment0 and joint.Attachment0.CFrame or CFrame.identity
+	local trail = trails[rig]
+	if trail then
+		trail.Enabled = true
+		task.delay(TRICK_TIME, function()
+			if trail.Parent and not Pose.isTricking(rig) then
+				trail.Enabled = false
+			end
+		end)
+	end
 end
 
 local function buildTrail(rig: Rig)
-	local character = rig.character
-	local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+	local torso = rig.character:FindFirstChild("UpperTorso") or rig.character:FindFirstChild("Torso")
 	if not torso or not torso:IsA("BasePart") then
 		return
 	end
@@ -91,63 +91,18 @@ local function buildTrail(rig: Rig)
 	trail.WidthScale = NumberSequence.new(1, 0.2)
 	trail.Enabled = false
 	trail.Parent = torso
-	trails[character] = trail
-end
-
-local function playTrick(character: Model, index: number)
-	local trick = TRICKS[index]
-	local joint = rootJoint(character)
-	if not trick or not joint or character:GetAttribute("Stunned") == true then
-		return
-	end
-	local token = {}
-	playing[character] = token
-	local trail = trails[character]
-	if trail then
-		trail.Enabled = true
-	end
-	local start = os.clock()
-	local conn
-	conn = RunService.PreSimulation:Connect(function()
-		if playing[character] ~= token or not joint.Parent then
-			conn:Disconnect()
-			return
-		end
-		local j = joint :: any
-		local current = j.Transform
-		local base = (lastSet[joint] == current and lastBase[joint]) or current
-		local t = (os.clock() - start) / TRICK_TIME
-		-- A knockback stun interrupts the trick cleanly.
-		if t >= 1 or character:GetAttribute("Stunned") == true then
-			j.Transform = base
-			lastSet[joint] = nil
-			if trail and trail.Parent then
-				trail.Enabled = false
-			end
-			playing[character] = nil
-			conn:Disconnect()
-			return
-		end
-		local eased = if t < 0.5 then 2 * t * t else 1 - (-2 * t + 2) ^ 2 / 2
-		local frame = jointFrame(j)
-		local spin = CFrame.fromAxisAngle(trick.axis, trick.angle * eased)
-		local value = frame:Inverse() * spin * frame * base
-		j.Transform = value
-		lastSet[joint] = value
-		lastBase[joint] = base
-	end)
+	trails[rig] = trail
 end
 
 local function attach(rig: Rig)
 	buildTrail(rig)
 	rig.trove:add(function()
-		playing[rig.character] = nil
+		trails[rig] = nil
 	end)
 	if not rig.isLocal then
 		return
 	end
-
-	-- Track the hardest fall speed of this airtime to size the landing ring.
+	-- The hardest fall speed of this airtime sizes the landing ring.
 	local fallSpeed = 0
 	rig.trove:connect(RunService.Heartbeat, function()
 		if rig.humanoid.FloorMaterial == Enum.Material.Air then
@@ -155,12 +110,8 @@ local function attach(rig: Rig)
 		end
 	end)
 	rig.trove:connect(rig.humanoid.StateChanged, function(_, new)
-		if new == Enum.HumanoidStateType.Jumping then
-			local trick = pickTrick()
-			playTrick(rig.character, trick)
-			remote:FireServer("Jump", trick)
-		elseif new == Enum.HumanoidStateType.Landed then
-			Effects.land(rig, fallSpeed / 55)
+		if new == Enum.HumanoidStateType.Landed then
+			Effects.land(rig, fallSpeed / LAND_SPEED)
 			fallSpeed = 0
 			remote:FireServer("Land")
 		end
@@ -168,15 +119,24 @@ local function attach(rig: Rig)
 end
 
 function JumpFx.start()
-	remote = Net.event(Stats.Remote.JumpFx)
+	remote = Net.unreliable(Stats.Remote.JumpFx)
 	Rigs.onAdded(attach)
+	-- The Controller reports every local jump (and whether it came out of a slide).
+	State.on("Jump", function(rig: Rig, longJump: boolean)
+		if not rig or not rig.isLocal then
+			return
+		end
+		local trick = if longJump then LONG_JUMP_TRICK else pickTrick()
+		playTrick(rig, trick)
+		remote:FireServer("Jump", trick)
+	end)
 	remote.OnClientEvent:Connect(function(kind: any, character: any, trick: any)
 		local rig = Rigs.get(character)
 		if not rig or rig.isLocal then
 			return
 		end
 		if kind == "Jump" and type(trick) == "number" then
-			playTrick(rig.character, trick)
+			playTrick(rig, trick)
 		elseif kind == "Land" then
 			Effects.land(rig, 1)
 		end
