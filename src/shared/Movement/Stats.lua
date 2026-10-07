@@ -1,12 +1,12 @@
--- Party Dash movement math, shared by the server (validation) and the client (motion + HUD).
+-- Party Dash movement numbers, shared by the server (validation) and the client (motion, HUD, mobile pad).
 -- Every value is derived from Config plus the player's live upgrade attributes (missing = level 0).
 --
 -- Cos_DashColor (Player attribute, set by Economy) accepts any of:
---   "#FF5FA0" / "FF5FA0"        a hex color
+--   "#FF5FA0" / "FF5FA0"             a hex color
 --   "Pink", "dash_pink", "DashPink"  a Theme.Colors key (case-insensitive, optional "dash" prefix)
---   "Really red"                 a BrickColor name
---   "Rainbow"                    a rainbow gradient
---   "" or missing                the default cyan/white dash trail
+--   "Really red"                     a BrickColor name
+--   "Rainbow"                        a rainbow gradient
+--   "" or missing                    the default cyan/white dash trail
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
@@ -14,20 +14,30 @@ local Theme = require(ReplicatedStorage.Shared.Theme)
 
 local Stats = {}
 
--- Remote names (Net.event) and ContextActionService action names.
+-- Remote names (Shared.Net) and ContextActionService action names.
 Stats.Remote = {
-	Dash = "Movement_Dash",
-	Slide = "Movement_Slide",
-	JumpFx = "Movement_JumpFx",
+	Dash = "Movement_Dash", -- C->S (t: client workspace:GetServerTimeNow())
+	Slide = "Movement_Slide", -- C->S (active: boolean, t: number)
+	JumpFx = "Movement_JumpFx", -- C<->S unreliable: ("Jump", trick) / ("Land")
 }
 Stats.Action = {
 	Dash = "PartyDash_Dash",
 	Slide = "PartyDash_Slide",
 }
 
--- The server forgives this much latency jitter when checking cooldowns.
-Stats.DASH_TOLERANCE = 0.3
+-- Input bindings. LeftShift used to toggle Shift Lock: the server turns that option off at boot.
+Stats.Keys = {
+	Dash = { Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift, Enum.KeyCode.Q, Enum.KeyCode.ButtonX },
+	Slide = { Enum.KeyCode.C, Enum.KeyCode.LeftControl, Enum.KeyCode.ButtonB },
+}
+
+Stats.INPUT_BUFFER = 0.15 -- a dash / slide pressed this long before it is ready still fires
+Stats.TIME_SKEW = 0.25 -- the server clamps client timestamps to [now - TIME_SKEW, now]
+Stats.DASH_TOLERANCE = 0.2 -- cooldown slack the server allows for clock / network jitter
 Stats.SLIDE_TOLERANCE = 0.15
+Stats.SLIDE_WINDOW_GRACE = 0.05 -- Forgive: a sample this soon after SlideEndAt still counts as sliding
+Stats.CAMERA_MIN_ZOOM = 6
+Stats.CAMERA_MAX_ZOOM = 45
 
 Stats.RAINBOW = ColorSequence.new({
 	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 70, 70)),
@@ -40,10 +50,15 @@ Stats.RAINBOW = ColorSequence.new({
 
 local DEFAULT_DASH = Theme.Colors.Cyan
 
+local function isFinite(n: any): boolean
+	return type(n) == "number" and n == n and n > -math.huge and n < math.huge
+end
+Stats.isFinite = isFinite
+
 -- Upgrade level 0..UPGRADE_MAX_LEVEL read live from the Player attribute "Upg_<name>".
 function Stats.upgradeLevel(player: Player, name: string): number
 	local value = player:GetAttribute("Upg_" .. name)
-	if type(value) ~= "number" or value ~= value then
+	if not isFinite(value) then
 		return 0
 	end
 	return math.clamp(math.floor(value), 0, Config.UPGRADE_MAX_LEVEL)
@@ -67,9 +82,17 @@ function Stats.jumpPower(player: Player): number
 	return Config.JUMP_POWER * math.max(0.2, multiplier(player, "JumpBoost"))
 end
 
--- Seconds between the END of one slide and the start of the next.
+-- Seconds between the END of one slide and the start of the next (no bar anywhere, brief #11).
 function Stats.slideCooldown(): number
 	return Config.SLIDE_COOLDOWN
+end
+
+-- Server: a client-reported server timestamp, clamped to [now - TIME_SKEW, now]. nil when it is not a finite number.
+function Stats.clampTime(t: any, now: number): number?
+	if not isFinite(t) then
+		return nil
+	end
+	return math.clamp(t, now - Stats.TIME_SKEW, now)
 end
 
 local function namedColor(raw: string): Color3?
