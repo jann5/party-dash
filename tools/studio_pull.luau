@@ -2,7 +2,8 @@
 -- Usage: replace __ROOT__ with the absolute repo (or worktree) path, then run via the Studio MCP
 -- execute_luau tool with datamodel_type = "Edit". Studio must NOT be in Play mode.
 -- The managed containers (ReplicatedStorage.Shared, ServerScriptService.Server,
--- StarterPlayerScripts.Client) are replaced wholesale. The legacy Spin objects are moved
+-- StarterPlayerScripts.Client, ReplicatedFirst.PartyDashFirst) are swapped for fresh copies; the previous copies are
+-- moved (disabled) into ServerStorage.PD_SyncArchive, so nothing is lost. The legacy Spin objects are moved
 -- (disabled) into ServerStorage.LegacyBackup the first time this runs.
 local ROOT = "__ROOT__"
 local Http = game:GetService("HttpService")
@@ -59,9 +60,28 @@ for _, entry in tree do
 	for i = 1, #parts - 1 do
 		parent = parent:FindFirstChild(parts[i]) or game:GetService(parts[i])
 	end
+	-- Non-destructive swap: the previous copy is moved into ServerStorage.PD_SyncArchive (only the latest copy of
+	-- each container is kept there), so a sync can always be undone by moving it back.
 	local old = parent:FindFirstChild(parts[#parts])
 	if old then
-		old:Destroy()
+		local archive = game.ServerStorage:FindFirstChild("PD_SyncArchive")
+		if not archive then
+			archive = Instance.new("Folder")
+			archive.Name = "PD_SyncArchive"
+			archive.Parent = game.ServerStorage
+		end
+		local key = string.gsub(entry.dest, "/", "_")
+		local previous = archive:FindFirstChild(key)
+		if previous then
+			previous.Parent = nil -- drop the older archived copy (it is replaced by the current one)
+		end
+		for _, d in old:GetDescendants() do
+			if d:IsA("BaseScript") then
+				d.Disabled = true
+			end
+		end
+		old.Name = key
+		old.Parent = archive
 	end
 	make(entry.node, parent)
 end
