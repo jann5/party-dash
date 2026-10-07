@@ -1,53 +1,46 @@
 --!strict
--- Live player profiles: session-locked loading/saving and every mutation (coins, XP, upgrades,
--- cosmetics). Every change is mirrored to Player attributes + leaderstats right away.
+-- Live player profiles: session-locked loading, saving and releasing. Mutations live in Grants; attribute
+-- mirroring in Mirror.
 --
--- Session lock (inside the stored record): lock = { jobId, time }. A server may load a profile only if
--- there is no lock, the lock is its own, or the lock is older than LOCK_STALE (5 min; a crashed server).
--- Autosave refreshes the timestamp every AUTOSAVE seconds; PlayerRemoving / BindToClose release it.
+-- Session lock (inside the stored record): lock = { jobId, time }. A server may load a profile only if there is
+-- no lock, the lock is its own, or the lock is older than LOCK_STALE (5 min; a crashed server). Autosave refreshes
+-- the timestamp every AUTOSAVE seconds; PlayerRemoving / BindToClose release it.
+local GroupService = game:GetService("GroupService")
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
-local Cosmetics = require(ReplicatedStorage.Shared.Economy.Cosmetics)
 local Rules = require(ReplicatedStorage.Shared.Economy.Rules)
 local Theme = require(ReplicatedStorage.Shared.Theme)
 
-local Announce = require(script.Parent.Parent.Announce)
+local Boards = require(script.Parent.Boards)
+local Feedback = require(script.Parent.Feedback)
+local Mirror = require(script.Parent.Mirror)
 local Profile = require(script.Parent.Profile)
 local Store = require(script.Parent.Store)
+local Types = require(script.Parent.Types)
 
-export type Session = {
-	player: Player,
-	key: string,
-	data: Profile.Data,
-	loaded: boolean,
-	persistent: boolean, -- false: temporary profile (load failed); never written back
-	lost: boolean, -- another server stole the lock; stop writing
-	saving: boolean,
-	closing: boolean, -- unloading: only the final (lock-releasing) save may still run
-	pendingReceipts: { [string]: boolean }, -- granted but not yet confirmed by a successful save
-	passes: { [string]: boolean },
-	connections: { RBXScriptConnection },
-}
+type Session = Types.Session
 
 local Sessions = {}
 
 Sessions.LOCK_STALE = 300
 Sessions.AUTOSAVE = 60
-Sessions.QUICK_SAVE_DELAY = 6 -- debounce for "save soon" after purchases / tutorial
+Sessions.QUICK_SAVE_DELAY = 6 -- debounce for "save soon" (DataStore allows ~1 write per key every 6 s)
 
 -- Game.JobId is "" in Studio; give each Studio server its own id so locks still work.
 local JOB_ID = if game.JobId ~= "" then game.JobId else "studio-" .. HttpService:GenerateGUID(false)
 Sessions.JOB_ID = JOB_ID
 
 local sessions: { [Player]: Session } = {}
+local unloading: { [number]: boolean } = {} -- userId -> final save in flight (same-server rejoin waits)
 local quickSaveQueued: { [Player]: boolean } = {}
 local winsRestored: { [Player]: boolean } = {} -- saved Wins already merged into leaderstats
-local changed = Instance.new("BindableEvent") -- (player, field) for other server modules
 
-Sessions.Changed = changed.Event
+local function now(): number
+	return workspace:GetServerTimeNow()
+end
 
 function Sessions.get(player: Player): Session?
 	local s = sessions[player]
@@ -57,117 +50,75 @@ function Sessions.get(player: Player): Session?
 	return nil
 end
 
-function Sessions.all(): { [Player]: Session }
-	return sessions
+-- Snapshot of the players with a session (safe to iterate while yielding).
+function Sessions.players(): { Player }
+	local list = {}
+	for player in sessions do
+		table.insert(list, player)
+	end
+	return list
 end
 
--- Mirroring -----------------------------------------------------------------------------------------
-
-local function stat(player: Player, name: string): IntValue?
-	local stats = player:FindFirstChild("leaderstats")
-	local v = stats and stats:FindFirstChild(name)
-	if v and v:IsA("IntValue") then
-		return v
-	end
-	return nil
+function Sessions.hasPass(player: Player, name: string): boolean
+	local s = sessions[player]
+	return s ~= nil and s.passes[name] == true
 end
 
-local function ownedCsv(s: Session): string
-	local ids = {}
-	for id in s.data.ownedCosmetics do
-		table.insert(ids, id)
-	end
-	if s.passes.VIP then
-		for _, item in Cosmetics.all() do
-			if item.vip then
-				table.insert(ids, item.id)
-			end
-		end
-	end
-	table.sort(ids)
-	return table.concat(ids, ",")
+-- Raw session (also while loading), for pass checks that may finish before the profile.
+function Sessions.raw(player: Player): Session?
+	return sessions[player]
 end
 
-function Sessions.owns(s: Session, item: Cosmetics.Item): boolean
-	if item.vip then
-		return s.passes.VIP == true
-	end
-	return s.data.ownedCosmetics[item.id] == true
-end
+-- Day rollover --------------------------------------------------------------------------------------
 
-local function mirrorCoins(s: Session)
-	s.player:SetAttribute("Coins", s.data.coins)
-	local coins = stat(s.player, "Coins")
-	if coins then
-		coins.Value = s.data.coins
+-- Applies UTC-day rules: a missed day resets the calendar, VIP owners get today's bonus spin, and the
+-- Ready flags are re-mirrored. Called on load, when a pass is granted and when the UTC day changes.
+function Sessions.refreshDay(s: Session)
+	local d = s.data
+	local today = Rules.utcDay()
+	if d.lastDaily > 0 and d.lastDaily < today - 1 then
+		d.calendarDay = 1
+		d.loginStreak = 0
 	end
+	if s.passes.VIP and d.vipSpinDay ~= today then
+		d.vipSpinDay = today
+		d.spins += Rules.VIP_DAILY_SPINS
+		Feedback.toast(s.player, "VIP bonus: +1 spin!", Theme.Colors.Gold)
+	end
+	Mirror.spins(s)
+	Mirror.daily(s)
+	Mirror.group(s)
 end
-
-local function mirrorLevel(s: Session)
-	s.player:SetAttribute("Level", s.data.level)
-	s.player:SetAttribute("XP", s.data.xp)
-	s.player:SetAttribute(Rules.Attr.XPNext, Rules.xpForLevel(s.data.level))
-end
-
-local function mirrorCosmetics(s: Session)
-	for _, slot in Cosmetics.SLOTS do
-		local id = s.data.equipped[slot] or ""
-		local item = Cosmetics.get(id)
-		if item and not Sessions.owns(s, item) then
-			id = "" -- e.g. VIP trail while the pass check failed: show the default but keep it saved
-		end
-		s.player:SetAttribute(Cosmetics.SLOT_INFO[slot].attr, id)
-	end
-	s.player:SetAttribute(Rules.Attr.Owned, ownedCsv(s))
-end
-
-function Sessions.mirrorAll(s: Session)
-	mirrorCoins(s)
-	mirrorLevel(s)
-	for name in Config.UPGRADES do
-		s.player:SetAttribute("Upg_" .. name, s.data.upgrades[name] or 0)
-	end
-	mirrorCosmetics(s)
-	for name in Config.GAMEPASSES do
-		s.player:SetAttribute(Rules.Attr.PassPrefix .. name, s.passes[name] == true)
-	end
-	if s.data.seenTutorial then
-		s.player:SetAttribute("Seen_Tutorial", true)
-	end
-end
-
-Sessions.mirrorCosmetics = mirrorCosmetics
 
 -- Store I/O -----------------------------------------------------------------------------------------
 
 type LoadOutcome = "ok" | "locked" | "error"
 
-local function tryAcquire(key: string): (LoadOutcome, Profile.Data?, any?)
+local function tryAcquire(key: string): (LoadOutcome, Profile.Data?)
 	local outcome: LoadOutcome = "error"
 	local loaded: Profile.Data? = nil
-	local holder: any = nil
 	local ok = Store.update(key, function(old)
 		local lock = type(old) == "table" and old.lock or nil
-		local now = os.time()
+		local t = os.time()
 		if
 			type(lock) == "table"
 			and lock.jobId ~= JOB_ID
 			and type(lock.time) == "number"
-			and now - lock.time < Sessions.LOCK_STALE
+			and t - lock.time < Sessions.LOCK_STALE
 		then
-			outcome, holder = "locked", lock
+			outcome = "locked"
 			return nil -- cancel: someone else owns this profile right now
 		end
 		local data = Profile.reconcile(old)
 		local record = Profile.serialize(data)
-		record.lock = { jobId = JOB_ID, time = now }
+		record.lock = { jobId = JOB_ID, time = t }
 		outcome, loaded = "ok", data
 		return record
 	end)
 	if not ok then
-		return "error", nil, nil
+		return "error", nil
 	end
-	return outcome, loaded, holder
+	return outcome, loaded
 end
 
 -- Writes the session to the store. release = true drops the lock (player leaving / shutdown).
@@ -177,6 +128,8 @@ local function write(s: Session, release: boolean): boolean
 	end
 	local stolen = false
 	local snapshot = Profile.serialize(s.data)
+	-- only receipts already in this snapshot are confirmed by this write
+	local confirming = table.clone(s.pendingReceipts)
 	local ok = Store.update(s.key, function(old)
 		local lock = type(old) == "table" and old.lock or nil
 		if type(lock) == "table" and lock.jobId ~= JOB_ID then
@@ -199,7 +152,10 @@ local function write(s: Session, release: boolean): boolean
 		return false
 	end
 	if ok then
-		table.clear(s.pendingReceipts)
+		for id in confirming do
+			s.pendingReceipts[id] = nil
+		end
+		task.spawn(Boards.submit, s)
 	end
 	return ok
 end
@@ -219,10 +175,13 @@ function Sessions.save(player: Player, release: boolean?): boolean
 	s.saving = true
 	local ok, result = pcall(write, s, release == true)
 	s.saving = false
+	if not ok then
+		warn("[Economy] save failed:", result)
+	end
 	return ok and result == true
 end
 
--- Debounced save after an important change (purchase, tutorial done).
+-- Debounced save after an important change (claim, purchase with coins, settings).
 function Sessions.saveSoon(player: Player)
 	if quickSaveQueued[player] then
 		return
@@ -233,121 +192,6 @@ function Sessions.saveSoon(player: Player)
 		if sessions[player] then
 			Sessions.save(player)
 		end
-	end)
-end
-
--- Mutations -----------------------------------------------------------------------------------------
-
-local function notify(s: Session, field: string)
-	changed:Fire(s.player, field)
-end
-
-function Sessions.addCoins(player: Player, amount: number, _reason: string?): number?
-	local s = Sessions.get(player)
-	if not s then
-		return nil
-	end
-	amount = math.floor(tonumber(amount) or 0)
-	s.data.coins = math.max(0, s.data.coins + amount)
-	if amount > 0 then
-		s.data.stats.coinsEarned += amount
-	end
-	mirrorCoins(s)
-	notify(s, "coins")
-	return s.data.coins
-end
-
--- Adds XP and handles level-ups. Returns the number of levels gained.
-function Sessions.addXP(player: Player, amount: number): number
-	local s = Sessions.get(player)
-	if not s then
-		return 0
-	end
-	amount = math.max(0, math.floor(tonumber(amount) or 0))
-	local d = s.data
-	d.xp += amount
-	local gained = 0
-	while d.xp >= Rules.xpForLevel(d.level) do
-		d.xp -= Rules.xpForLevel(d.level)
-		d.level += 1
-		gained += 1
-	end
-	mirrorLevel(s)
-	if gained > 0 then
-		Announce.toast(player, ("LEVEL UP! You're now Lv %d"):format(d.level), Theme.Colors.Purple)
-		notify(s, "level")
-	end
-	return gained
-end
-
-function Sessions.setUpgrade(player: Player, name: string, level: number)
-	local s = Sessions.get(player)
-	if not s or not Config.UPGRADES[name] then
-		return
-	end
-	s.data.upgrades[name] = math.clamp(math.floor(level), 0, Config.UPGRADE_MAX_LEVEL)
-	player:SetAttribute("Upg_" .. name, s.data.upgrades[name])
-	notify(s, "upgrades")
-end
-
-function Sessions.grantCosmetic(player: Player, id: string)
-	local s = Sessions.get(player)
-	local item = Cosmetics.get(id)
-	if not s or not item or item.vip then
-		return
-	end
-	s.data.ownedCosmetics[item.id] = true
-	mirrorCosmetics(s)
-end
-
-function Sessions.equip(player: Player, slot: string, id: string)
-	local s = Sessions.get(player)
-	if not s or not Cosmetics.isSlot(slot) then
-		return
-	end
-	s.data.equipped[slot] = id
-	mirrorCosmetics(s)
-	notify(s, "equipped")
-end
-
-function Sessions.setPass(player: Player, name: string, owned: boolean)
-	local s = sessions[player]
-	if not s then
-		return
-	end
-	s.passes[name] = owned
-	player:SetAttribute(Rules.Attr.PassPrefix .. name, owned)
-	if s.loaded then
-		mirrorCosmetics(s)
-	end
-	notify(s, "passes")
-end
-
-function Sessions.hasPass(player: Player, name: string): boolean
-	local s = sessions[player]
-	return s ~= nil and s.passes[name] == true
-end
-
--- Daily reward: once per UTC day (checked on join and by the autosave loop for long sessions).
--- `delay` lets the client HUD finish loading so the coins visibly fly in with the toast.
-local dailyQueued: { [Player]: boolean } = {}
-function Sessions.checkDaily(player: Player, delay: number?)
-	local s = Sessions.get(player)
-	if not s or dailyQueued[player] or s.data.lastDaily == Rules.utcDay() then
-		return
-	end
-	dailyQueued[player] = true
-	task.delay(delay or 0, function()
-		dailyQueued[player] = nil
-		local live = Sessions.get(player)
-		local today = Rules.utcDay()
-		if not live or player.Parent ~= Players or live.data.lastDaily == today then
-			return
-		end
-		live.data.lastDaily = today
-		Sessions.addCoins(player, Config.DAILY_REWARD, "daily")
-		Announce.toast(player, ("DAILY REWARD! +%d coins"):format(Config.DAILY_REWARD), Theme.Colors.Green)
-		Sessions.saveSoon(player)
 	end)
 end
 
@@ -365,20 +209,6 @@ local function watchPlayer(s: Session)
 			end
 		end)
 	)
-	-- Wins: Core increments leaderstats.Wins; mirror it into the profile.
-	task.spawn(function()
-		local stats = player:WaitForChild("leaderstats", 30)
-		local wins = stats and stats:WaitForChild("Wins", 30)
-		if not (wins and wins:IsA("IntValue")) or sessions[player] ~= s then
-			return
-		end
-		table.insert(
-			s.connections,
-			wins.Changed:Connect(function(value)
-				s.data.wins = math.max(0, math.floor(value))
-			end)
-		)
-	end)
 end
 
 -- Leaderstats: Core creates the folder with Wins/Streak; add Coins and restore saved Wins.
@@ -396,40 +226,56 @@ local function setupLeaderstats(s: Session)
 	end
 	(coins :: IntValue).Value = s.data.coins
 	local wins = stats:WaitForChild("Wins", 30)
-	if wins and wins:IsA("IntValue") and sessions[player] == s then
-		if winsRestored[player] then
-			-- re-applied profile (reload): leaderstats already holds the live total
-			s.data.wins = math.max(s.data.wins, wins.Value)
-		else
-			-- wins earned before the profile finished loading are kept on top of the saved total
-			winsRestored[player] = true
-			s.data.wins += wins.Value
-		end
-		wins.Value = s.data.wins
+	if not (wins and wins:IsA("IntValue")) or sessions[player] ~= s then
+		return
 	end
+	if winsRestored[player] then
+		-- re-applied profile (reload): leaderstats already holds the live total
+		s.data.wins = math.max(s.data.wins, wins.Value)
+	else
+		-- wins earned before the profile finished loading are kept on top of the saved total
+		winsRestored[player] = true
+		s.data.wins += wins.Value
+	end
+	wins.Value = s.data.wins
+	-- Core increments leaderstats.Wins; keep the profile in sync.
+	table.insert(
+		s.connections,
+		wins.Changed:Connect(function(value)
+			s.data.wins = math.max(0, math.floor(value))
+		end)
+	)
 end
 
-local loadedEvent = Instance.new("BindableEvent") -- (player) after a profile is applied
-Sessions.Loaded = loadedEvent.Event
+local function checkGroup(s: Session)
+	if Config.GROUP_ID == 0 then
+		return
+	end
+	local ok, member = pcall(s.player.IsInGroup, s.player, Config.GROUP_ID)
+	if ok and sessions[s.player] == s then
+		s.groupMember = member == true
+		Mirror.group(s)
+	end
+end
 
 local function apply(s: Session)
 	s.loaded = true
 	if s.player:GetAttribute("Seen_Tutorial") == true then
 		s.data.seenTutorial = true -- finished the tutorial before the profile arrived
 	end
-	Sessions.mirrorAll(s)
+	s.joinedAt = now()
+	s.giftIndex = 1
+	s.giftAt = s.joinedAt + Rules.giftOffset(1)
+	Sessions.refreshDay(s)
+	Mirror.all(s)
 	watchPlayer(s)
 	task.spawn(setupLeaderstats, s)
+	task.spawn(checkGroup, s)
 	s.player:SetAttribute(Rules.Attr.Loaded, true)
-	loadedEvent:Fire(s.player)
 end
 
--- Loads (or re-loads) a player's profile. Yields until it is applied or the player leaves.
-function Sessions.load(player: Player)
-	if sessions[player] then
-		return
-	end
-	local s: Session = {
+local function newSession(player: Player): Session
+	return {
 		player = player,
 		key = Store.key(player.UserId),
 		data = Profile.default(),
@@ -441,9 +287,26 @@ function Sessions.load(player: Player)
 		pendingReceipts = {},
 		passes = {},
 		connections = {},
+		joinedAt = 0,
+		giftIndex = 1,
+		giftAt = 0,
+		groupMember = nil,
+		board = { wins = -1, level = -1 },
 	}
+end
+
+-- Loads (or re-loads) a player's profile. Yields until it is applied or the player leaves.
+function Sessions.load(player: Player)
+	if sessions[player] then
+		return
+	end
+	local s = newSession(player)
 	sessions[player] = s
 
+	-- same-server rejoin: let the previous session's final save land first
+	while unloading[player.UserId] and player.Parent == Players do
+		task.wait(0.1)
+	end
 	Store.waitReady()
 	local delays = { 2, 4, 8, 15 }
 	local attempt = 0
@@ -468,14 +331,12 @@ function Sessions.load(player: Player)
 			s.data = Profile.default()
 			apply(s)
 			task.delay(4, function()
-				if player.Parent then
-					Announce.toast(player, "Couldn't load your save. Progress won't be kept!", Theme.Colors.Red)
-				end
+				Feedback.toast(player, "Couldn't load your save. Progress won't be kept!", Theme.Colors.Red)
 			end)
 			return
 		elseif outcome == "locked" and not toldLocked then
 			toldLocked = true
-			Announce.toast(player, "Loading your save from another server...", Theme.Colors.Blue)
+			Feedback.toast(player, "Loading your save from another server...", Theme.Colors.Blue)
 		end
 		task.wait(delays[math.min(attempt, #delays)])
 	end
@@ -484,7 +345,7 @@ function Sessions.load(player: Player)
 	end
 end
 
--- Saves + releases the lock, then forgets the session (player leaving).
+-- Saves + releases the lock, then forgets the session (player leaving / shutdown).
 function Sessions.unload(player: Player)
 	local s = sessions[player]
 	if not s then
@@ -498,6 +359,7 @@ function Sessions.unload(player: Player)
 		return
 	end
 	s.closing = true
+	unloading[player.UserId] = true
 	if s.loaded then
 		Sessions.save(player, true)
 	end
@@ -507,6 +369,7 @@ function Sessions.unload(player: Player)
 	if sessions[player] == s then
 		sessions[player] = nil
 	end
+	unloading[player.UserId] = nil
 	quickSaveQueued[player] = nil
 	winsRestored[player] = nil
 end
@@ -530,7 +393,8 @@ function Sessions.reload(player: Player): Profile.Data?
 	if fresh then
 		fresh.passes = passes
 		if fresh.loaded then
-			Sessions.mirrorAll(fresh)
+			Sessions.refreshDay(fresh)
+			Mirror.all(fresh)
 			return fresh.data
 		end
 	end
@@ -539,6 +403,31 @@ end
 
 function Sessions.peekStored(userId: number): any
 	return Store.peek(Store.key(userId))
+end
+
+-- Fresh group membership check for a claim (Player:IsInGroup is cached per server; GetGroupsAsync is not).
+-- Yields. Returns the best known answer.
+function Sessions.checkGroupFresh(s: Session): boolean
+	if Config.GROUP_ID == 0 then
+		return false
+	end
+	local ok, groups = pcall(GroupService.GetGroupsAsync, GroupService, s.player.UserId)
+	if ok and type(groups) == "table" then
+		local member = false
+		for _, g in groups do
+			if type(g) == "table" and g.Id == Config.GROUP_ID then
+				member = true
+				break
+			end
+		end
+		s.groupMember = member
+	elseif s.groupMember ~= true then
+		local ok2, member = pcall(s.player.IsInGroup, s.player, Config.GROUP_ID)
+		if ok2 then
+			s.groupMember = member == true
+		end
+	end
+	return s.groupMember == true
 end
 
 return Sessions

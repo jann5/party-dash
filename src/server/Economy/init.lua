@@ -1,36 +1,48 @@
 --!strict
--- Party Dash Economy (P9): coins, XP/levels, upgrades, cosmetics, Robux, persistence.
--- Booted by the child Script "Boot" (Economy.start()). Server-side API for other systems and tests:
+-- Party Dash Economy v2: coins, XP/levels, upgrades, cosmetics, Robux products + passes, wheel of fortune, daily /
+-- group / playtime rewards, revive tokens, settings, persistence. Booted by the child Script "Boot".
 --
+-- Server API (other systems and tests):
 --   local Economy = require(ServerScriptService.Server.Economy)
---   Economy.getProfile(player)              -> profile data table (nil until loaded)
---   Economy.addCoins(player, n, reason?)    -> new balance (nil until loaded)
---   Economy.addXP(player, n)                -> levels gained
---   Economy.processReceipt(receiptInfo)     -> Enum.ProductPurchaseDecision (also MarketplaceService.ProcessReceipt)
---   Economy.save(player)                    -> boolean (session-locked UpdateAsync, or in-memory fallback)
---   Economy.reload(player)                  -> profile data re-read from the store (save + release + load)
---   Economy.peekStored(userId)              -> raw stored record (read-only)
---   Economy.roundFinished(result) / Economy.soloFinished(player, info)  (same as the Signals handlers)
+--   Economy.getProfile(player)                      -> profile data table (nil until loaded)
+--   Economy.addCoins(player, n, reason?)            -> new balance (nil until loaded)
+--   Economy.addXP(player, n)                        -> levels gained (level-ups pay coins/spins)
+--   Economy.applyBundle(player, bundle, reason?)    -> granted bundle; bundle = { coins?, xp?, spins?, revives?,
+--                                                      boostSeconds?, items? } (owned items turn into coins)
+--   Economy.processReceipt(receiptInfo, keyHint?)   -> Enum.ProductPurchaseDecision (idempotent by PurchaseId)
+--   Economy.devBuy(player, productKey)              -> boolean (Studio only: same path as a real purchase)
+--   Economy.claim(player, "daily"|"group"|"gift")   -> { ok, reward, message }   (same as Economy_Claim)
+--   Economy.spin(player)                            -> { ok, index, prize, ... } (same as Economy_Spin)
+--   Economy.useRevive(player)                       -> (ok, message)            (same as Economy_UseRevive)
+--   Economy.setSettings(player, { music?, sfx?, shake? }) -> boolean
+--   Economy.setGiftAt(player, serverTime) / Economy.readyGift(player)   (test hooks for playtime gifts)
+--   Economy.roundStarted(info) / roundFinished(result) / soloFinished(player, info)   (the Signals handlers)
 --   Economy.buyUpgrade(player, name) / buyCosmetic(player, id) / equip(player, id)  -> (ok, message)
---   Economy.storeMode()                     -> "datastore" | "memory"
+--   Economy.save(player) / reload(player) / peekStored(userId) / storeMode()
 --
--- Calls made from another Luau VM (e.g. the Studio command bar, which gets its own copy of every
--- ModuleScript) are forwarded to the live instance through the BindableFunction "EconomyApi".
-local MarketplaceService = game:GetService("MarketplaceService")
+-- Calls made from another Luau VM (e.g. the Studio command bar, which gets its own copy of every ModuleScript)
+-- are forwarded to the live instance through the BindableFunction "EconomyApi". Such a copy also forwards its
+-- own VM's Signals (RoundStarted / RoundFinished / SoloFinished), so tests can fire them from anywhere.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Rules = require(ReplicatedStorage.Shared.Economy.Rules)
+local SharedProducts = require(ReplicatedStorage.Shared.Products)
 
 local Server = script.Parent
 local Signals = require(Server.Signals)
 
-local Market = require(script.Market)
+local Claims = require(script.Claims)
+local Grants = require(script.Grants)
+local Limiter = require(script.Limiter)
+local Products = require(script.Products)
 local Remotes = require(script.Remotes)
+local Revive = require(script.Revive)
 local Rewards = require(script.Rewards)
 local Sessions = require(script.Sessions)
 local Store = require(script.Store)
 local Visuals = require(script.Visuals)
+local Wheel = require(script.Wheel)
 
 local Economy = {}
 
@@ -72,6 +84,7 @@ local function portableResult(result: any): any
 	copy.survived = rekey(result.survived)
 	copy.placements = rekey(result.placements)
 	copy.scores = rekey(result.scores)
+	copy.kos = rekey(result.kos)
 	return copy
 end
 
@@ -96,22 +109,79 @@ function Economy.addCoins(player: Player, amount: number, reason: string?): numb
 	if not started then
 		return forward("addCoins", player, amount, reason)
 	end
-	return Sessions.addCoins(player, amount, reason)
+	return Grants.addCoins(player, amount, reason)
 end
 
 function Economy.addXP(player: Player, amount: number): number
 	if not started then
 		return forward("addXP", player, amount) or 0
 	end
-	return Sessions.addXP(player, amount)
+	return (Grants.addXP(player, amount))
 end
 
-function Economy.processReceipt(receiptInfo: any): Enum.ProductPurchaseDecision
+function Economy.applyBundle(player: Player, bundle: any, reason: string?): any
 	if not started then
-		local hint = if type(receiptInfo) == "table" then Rules.productKey(receiptInfo.ProductId) else nil
+		return forward("applyBundle", player, bundle, reason)
+	end
+	return Grants.applyBundle(player, bundle, reason)
+end
+
+function Economy.processReceipt(receiptInfo: any, keyHint: string?): Enum.ProductPurchaseDecision
+	if not started then
+		local hint = keyHint
+		if not hint and type(receiptInfo) == "table" then
+			hint = SharedProducts.keyForProductId(tonumber(receiptInfo.ProductId) or 0)
+		end
 		return forward("processReceipt", receiptInfo, hint) or Enum.ProductPurchaseDecision.NotProcessedYet
 	end
-	return Market.processReceipt(receiptInfo)
+	return Products.processReceipt(receiptInfo, keyHint)
+end
+
+function Economy.devBuy(player: Player, key: string): boolean
+	if not started then
+		return forward("devBuy", player, key) == true
+	end
+	return Products.devBuy(player, key)
+end
+
+function Economy.claim(player: Player, kind: string): any
+	if not started then
+		return forward("claim", player, kind)
+	end
+	return Claims.claim(player, kind)
+end
+
+function Economy.spin(player: Player): any
+	if not started then
+		return forward("spin", player)
+	end
+	return Wheel.spin(player)
+end
+
+function Economy.useRevive(player: Player): (boolean, string)
+	if not started then
+		return forward("useRevive", player)
+	end
+	return Revive.use(player)
+end
+
+function Economy.setSettings(player: Player, settings: any): boolean
+	if not started then
+		return forward("setSettings", player, settings) == true
+	end
+	return Remotes.setSettings(player, settings)
+end
+
+function Economy.setGiftAt(player: Player, serverTime: number): boolean
+	if not started then
+		return forward("setGiftAt", player, serverTime) == true
+	end
+	return Claims.setGiftAt(player, serverTime)
+end
+
+-- Makes the next playtime gift claimable right now (tests).
+function Economy.readyGift(player: Player): boolean
+	return Economy.setGiftAt(player, workspace:GetServerTimeNow() - 1)
 end
 
 function Economy.save(player: Player): boolean
@@ -133,6 +203,14 @@ function Economy.peekStored(userId: number): any
 		return forward("peekStored", userId)
 	end
 	return Sessions.peekStored(userId)
+end
+
+function Economy.roundStarted(info: any)
+	if not started then
+		forward("roundStarted", info)
+		return
+	end
+	Rewards.roundStarted(info)
 end
 
 function Economy.roundFinished(result: any): { [Player]: number }
@@ -181,13 +259,15 @@ end
 -- Boot ---------------------------------------------------------------------------------------------
 
 local function onPlayerAdded(player: Player)
+	player:SetAttribute(Rules.Attr.RoundStreak, 0)
 	task.spawn(Sessions.load, player) -- creates the session synchronously, then yields on the store
-	task.spawn(Market.refreshPasses, player)
+	task.spawn(Products.refreshPasses, player)
+	task.spawn(Wheel.checkPolicy, player)
 end
 
 local function saveAll(release: boolean)
 	local pending = 0
-	for player in Sessions.all() do
+	for _, player in Sessions.players() do
 		pending += 1
 		task.spawn(function()
 			if release then
@@ -204,61 +284,58 @@ local function saveAll(release: boolean)
 	end
 end
 
-function Economy.start()
-	if started or isRemoteCopy then
-		return
+-- Autosave (also refreshes the session lock), spread out so writes don't burst.
+local function autosaveLoop()
+	while true do
+		task.wait(Sessions.AUTOSAVE)
+		for _, player in Sessions.players() do
+			if Sessions.get(player) then
+				task.spawn(Sessions.save, player)
+				task.wait(0.2)
+			end
+		end
 	end
-	started = true
+end
 
-	task.spawn(Store.init)
-	Remotes.start()
-	Market.start()
-	Visuals.start()
-
-	MarketplaceService.ProcessReceipt = Economy.processReceipt
-
-	Sessions.Loaded:Connect(function(player: Player)
-		Sessions.checkDaily(player, 3) -- once the HUD is listening, so the coins fly in with the toast
-	end)
-
-	Signals.RoundFinished:Connect(Rewards.roundFinished)
-	Signals.SoloFinished:Connect(Rewards.soloFinished)
-
-	Players.PlayerAdded:Connect(onPlayerAdded)
-	for _, p in Players:GetPlayers() do
-		onPlayerAdded(p)
-	end
-	Players.PlayerRemoving:Connect(function(player)
-		Sessions.unload(player)
-	end)
-	game:BindToClose(function()
-		saveAll(true)
-	end)
-
-	-- Autosave (also refreshes the session lock) + daily rollover for long sessions.
-	task.spawn(function()
-		while true do
-			task.wait(Sessions.AUTOSAVE)
-			for player in Sessions.all() do
-				if Sessions.get(player) then
-					Sessions.checkDaily(player)
-					task.spawn(Sessions.save, player)
-					task.wait(0.2) -- spread writes out
+-- UTC midnight: daily chest, free spin, group chest and VIP spin become available again for long sessions.
+local function dayLoop()
+	local day = Rules.utcDay()
+	while true do
+		task.wait(10)
+		local today = Rules.utcDay()
+		if today ~= day then
+			day = today
+			for _, player in Sessions.players() do
+				local s = Sessions.get(player)
+				if s then
+					local ok, err = pcall(Sessions.refreshDay, s)
+					if not ok then
+						warn("[Economy] day rollover failed:", err)
+					end
 				end
 			end
 		end
-	end)
+	end
+end
 
-	-- Bridge for other VMs (see header).
+local function startBridge()
 	local methods: { [string]: (...any) -> ...any } = {
 		getProfile = Economy.getProfile,
 		isLoaded = Economy.isLoaded,
 		addCoins = Economy.addCoins,
 		addXP = Economy.addXP,
-		processReceipt = Market.processReceipt,
+		applyBundle = Economy.applyBundle,
+		processReceipt = Economy.processReceipt,
+		devBuy = Economy.devBuy,
+		claim = Economy.claim,
+		spin = Economy.spin,
+		useRevive = Economy.useRevive,
+		setSettings = Economy.setSettings,
+		setGiftAt = Economy.setGiftAt,
 		save = Economy.save,
 		reload = Economy.reload,
 		peekStored = Economy.peekStored,
+		roundStarted = Economy.roundStarted,
 		roundFinished = Economy.roundFinished,
 		soloFinished = Economy.soloFinished,
 		buyUpgrade = Economy.buyUpgrade,
@@ -278,14 +355,44 @@ function Economy.start()
 	bridge.Parent = script
 end
 
+function Economy.start()
+	if started or isRemoteCopy then
+		return
+	end
+	started = true
+
+	task.spawn(Store.init)
+	Limiter.start()
+	Remotes.start()
+	Claims.start()
+	Wheel.start()
+	Revive.start()
+	Products.start()
+	Visuals.start()
+
+	Signals.RoundStarted:Connect(Rewards.roundStarted)
+	Signals.RoundFinished:Connect(Rewards.roundFinished)
+	Signals.SoloFinished:Connect(Rewards.soloFinished)
+
+	Players.PlayerAdded:Connect(onPlayerAdded)
+	for _, p in Players:GetPlayers() do
+		onPlayerAdded(p)
+	end
+	Players.PlayerRemoving:Connect(Sessions.unload)
+	game:BindToClose(function()
+		saveAll(true)
+	end)
+
+	task.spawn(autosaveLoop)
+	task.spawn(dayLoop)
+	startBridge()
+end
+
 -- Another VM's copy: forward its Signals (the command bar has its own Signals table too).
 if isRemoteCopy then
-	Signals.RoundFinished:Connect(function(result)
-		Economy.roundFinished(result)
-	end)
-	Signals.SoloFinished:Connect(function(player, info)
-		Economy.soloFinished(player, info)
-	end)
+	Signals.RoundStarted:Connect(Economy.roundStarted)
+	Signals.RoundFinished:Connect(Economy.roundFinished)
+	Signals.SoloFinished:Connect(Economy.soloFinished)
 end
 
 return Economy

@@ -1,14 +1,15 @@
 --!strict
 -- Key/value backend for profiles: the real DataStore when available, otherwise an in-memory table
--- (Studio without API access). Both expose the same UpdateAsync-style `update(key, transform)` so the
--- session-locking logic in Sessions runs identically in either mode.
+-- (Studio without API access / unpublished place). Both expose the same UpdateAsync-style `update(key, transform)`
+-- so the session-locking logic in Sessions runs identically in either mode.
+-- Studio sessions use their own store name so tests never touch live players' data.
 local DataStoreService = game:GetService("DataStoreService")
 local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
 
 local Store = {}
 
-Store.NAME = "PartyDash_Profiles_v1"
+Store.NAME = if RunService:IsStudio() then "PartyDash_Profiles_Studio_v1" else "PartyDash_Profiles_v1"
 Store.MAX_ATTEMPTS = 4
 
 type Transform = (old: any) -> any
