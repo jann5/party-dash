@@ -278,9 +278,9 @@ function Forgive.judge(player: Player, t: number, isClear: (Sample) -> boolean):
 	end
 	local ok, ping = pcall(player.GetNetworkPing, player)
 	local verdictAt = Forgive.verdictTime(t, if ok and Stats.isFinite(ping) then ping else 0)
-	local wait = math.min(verdictAt - now(), Forgive.MAX_WAIT)
-	if wait > 0 then
-		task.wait(wait)
+	local pause = math.min(verdictAt - now(), Forgive.MAX_WAIT)
+	if pause > 0 then
+		task.wait(pause)
 	end
 	local t1 = math.min(verdictAt, now())
 	local list = Forgive.samples(player, t - Config.FORGIVE_PAST, t1)

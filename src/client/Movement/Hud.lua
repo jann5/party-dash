@@ -30,6 +30,9 @@ local INDICATOR_X = 0.38 -- share of the screen width
 local INDICATOR_BOTTOM = 118 -- px above the bottom edge (never less, whatever the UI scale)
 local SPEED_LINE_COUNT = 22
 local LANE_CHECK_EVERY = 0.25
+-- Bottom-center UIKit stacks the indicator must never sit on: { ScreenGui, child of its Root }.
+local LANES_TO_AVOID = { { "PD_Lanes", "Toast" }, { "PD_Lanes", "Action" }, { "PD_Toasts", "Stack" } }
+local LANE_MARGIN = 8 -- px
 
 type Indicator = {
 	frame: Frame,
@@ -59,21 +62,32 @@ local function alive(): boolean
 	return humanoid ~= nil and humanoid.Health > 0
 end
 
--- Something is showing in the bottom-center action lane (death panel, vote cards): step aside.
-local function actionLaneBusy(): boolean
+local function intersects(a: GuiObject, b: GuiObject, margin: number): boolean
+	local ap, as = a.AbsolutePosition, a.AbsoluteSize
+	local bp, bs = b.AbsolutePosition, b.AbsoluteSize
+	return ap.X < bp.X + bs.X + margin
+		and bp.X < ap.X + as.X + margin
+		and ap.Y < bp.Y + bs.Y + margin
+		and bp.Y < ap.Y + as.Y + margin
+end
+
+-- Something in the bottom-center toast / action lanes (toasts, death panel, vote cards) covers the indicator's
+-- spot: step aside until it is gone.
+local function laneCovers(target: GuiObject): boolean
 	local pg = player:FindFirstChildOfClass("PlayerGui")
-	local lanes = pg and pg:FindFirstChild("PD_Lanes")
-	if not lanes or not lanes:IsA("ScreenGui") or not lanes.Enabled then
+	if not pg then
 		return false
 	end
-	local laneRoot = lanes:FindFirstChild("Root")
-	local lane = laneRoot and laneRoot:FindFirstChild("Action")
-	if not lane then
-		return false
-	end
-	for _, child in lane:GetChildren() do
-		if child:IsA("GuiObject") and child.Visible then
-			return true
+	for _, path in LANES_TO_AVOID do
+		local screen = pg:FindFirstChild(path[1])
+		local laneRoot = screen and screen:IsA("ScreenGui") and screen.Enabled and screen:FindFirstChild("Root")
+		local lane = if laneRoot then laneRoot:FindFirstChild(path[2]) else nil
+		if lane then
+			for _, child in lane:GetChildren() do
+				if child:IsA("GuiObject") and child.Visible and intersects(child, target, LANE_MARGIN) then
+					return true
+				end
+			end
 		end
 	end
 	return false
@@ -119,7 +133,7 @@ local function buildIndicator(): Indicator
 	local shade = UIKit.new("Frame", {
 		Name = "Shade",
 		BackgroundColor3 = Colors.Ink,
-		BackgroundTransparency = 0.25,
+		BackgroundTransparency = 0.45, -- same recharge fill as the touch Dash button (ART_BIBLE 8.5)
 		BorderSizePixel = 0,
 		Size = UDim2.fromScale(1, 0),
 		Visible = false,
@@ -263,7 +277,7 @@ local function update(dt: number)
 	local now = os.clock()
 	if now >= nextLaneCheck then
 		nextLaneCheck = now + LANE_CHECK_EVERY
-		laneBusy = actionLaneBusy()
+		laneBusy = laneCovers(indicator.frame)
 	end
 
 	local touch = ActionButton.isTouch()

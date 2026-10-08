@@ -28,6 +28,8 @@ local TRICKS = {
 	{ axis = Vector3.xAxis, angle = 2 * math.pi, weight = 30 }, -- back flip
 }
 local LAND_SPEED = 55 -- fall speed that gives a full-size landing ring
+local MIN_AIR_TIME = 0.15 -- shorter airtimes (curbs, steps) land without a ring
+local SLIDE_QUIET = 0.35 -- no landing ring this long after a slide starts / ends on the ground
 
 local remote: UnreliableRemoteEvent
 local trails: { [Rig]: Trail } = {}
@@ -104,17 +106,38 @@ local function attach(rig: Rig)
 	end
 	-- The hardest fall speed of this airtime sizes the landing ring.
 	local fallSpeed = 0
+	local airborneAt: number? = nil
+	-- The slide lowers / raises the hips, which can flip the Humanoid through Freefall -> Landed: not a landing.
+	local quietUntil = 0
+	local function quiet()
+		quietUntil = os.clock() + SLIDE_QUIET
+	end
+	rig.trove:add(State.on("SlideStart", quiet))
+	rig.trove:add(State.on("SlideEnd", function(_, reason)
+		if reason ~= "jump" and reason ~= "air" then
+			quiet()
+		end
+	end))
 	rig.trove:connect(RunService.Heartbeat, function()
 		if rig.humanoid.FloorMaterial == Enum.Material.Air then
+			airborneAt = airborneAt or os.clock()
 			fallSpeed = math.max(fallSpeed, -rig.root.AssemblyLinearVelocity.Y)
 		end
 	end)
 	rig.trove:connect(rig.humanoid.StateChanged, function(_, new)
-		if new == Enum.HumanoidStateType.Landed then
-			Effects.land(rig, fallSpeed / LAND_SPEED)
-			fallSpeed = 0
-			remote:FireServer("Land")
+		if new ~= Enum.HumanoidStateType.Landed then
+			return
 		end
+		local now = os.clock()
+		local airTime = if airborneAt then now - airborneAt else 0
+		local speed = fallSpeed
+		fallSpeed = 0
+		airborneAt = nil
+		if State.sliding or now < quietUntil or airTime < MIN_AIR_TIME then
+			return
+		end
+		Effects.land(rig, speed / LAND_SPEED)
+		remote:FireServer("Land")
 	end)
 end
 

@@ -9,6 +9,8 @@
 -- C0 is never written. When a layer goes idle every joint still holding our Transform gets its rest value back (the
 -- Animator re-poses animated joints next frame anyway), HipHeight returns to its exact rest value and the camera
 -- lift is cleared. The same happens at once on stun, death and respawn.
+-- Jumping out of a slide starts from the lowered hips, so the take-off speed gets topped up to reach exactly the
+-- normal jump apex (every minigame's clear height stays valid for a slide-jump too).
 -- Remote characters are posed from the replicated Sliding / Dashing attributes; the local one from State.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -36,6 +38,7 @@ local DASH_PITCH = math.rad(-14)
 local MAX_ROLL = math.rad(12)
 local ROLL_PER_YAW_RATE = 0.05
 local FLOOR_PROBE = 6
+local LIFT_WINDOW = 0.15 -- the jump impulse must show up this soon after the slide-jump for the top-up
 
 type JointRef = { inst: Instance, rot: CFrame, wrote: CFrame? }
 type Trick = { axis: Vector3, angle: number, start: number, duration: number }
@@ -56,6 +59,9 @@ type PoseState = {
 	hipWrote: number?,
 	camLift: number,
 	floorY: number?,
+	rootAbove: number?, -- local R15 while sliding: root height above the floor (last frame)
+	lift: number?, -- slide-jump: studs of jump height to give back
+	liftUntil: number,
 	params: RaycastParams,
 }
 
@@ -157,6 +163,36 @@ local function restore(p: PoseState)
 	end
 	p.w = 0
 	p.trick = nil
+	p.rootAbove = nil
+	p.lift = nil
+end
+
+-- Slide-jump: how much lower than a standing take-off the root was (the physical part of the hip drop).
+local function liftFor(p: PoseState): number?
+	local rest, above = p.hipRest, p.rootAbove
+	if not rest or not above then
+		return nil
+	end
+	local standing = rest + p.rig.root.Size.Y / 2
+	local lift = math.clamp(standing - above, 0, math.max(0, rest - MIN_HIP_HEIGHT))
+	return if lift > 0.02 then lift else nil
+end
+
+-- Tops the jump's vertical speed up so the apex matches a standing jump: v'^2 = v^2 + 2 g lift.
+local function applyLift(p: PoseState, now: number)
+	local lift = p.lift
+	if not lift then
+		return
+	end
+	local root = p.rig.root
+	local v = root.AssemblyLinearVelocity
+	if v.Y > 1 then
+		p.lift = nil
+		local vy = math.sqrt(v.Y * v.Y + 2 * workspace.Gravity * lift)
+		root.AssemblyLinearVelocity = Vector3.new(v.X, vy, v.Z)
+	elseif now > p.liftUntil then
+		p.lift = nil
+	end
 end
 
 -- Root-joint pivot (parent = HumanoidRootPart space): the hip line.
@@ -213,6 +249,7 @@ local function update(p: PoseState, dt: number, now: number)
 		p.roll, p.pitch = 0, 0
 		return
 	end
+	applyLift(p, now)
 
 	-- Blend weights.
 	local sliding = slidingNow(rig)
@@ -299,6 +336,9 @@ local function update(p: PoseState, dt: number, now: number)
 		if hit then
 			p.floorY = hit.Position.Y
 		end
+		if rig.isLocal and sliding and p.floorY then
+			p.rootAbove = root.Position.Y - p.floorY
+		end
 		local pivotY = (root.CFrame * pivot).Y
 		local above = if p.floorY then pivotY - p.floorY else standing
 		drop = math.clamp(above - target, 0, standing)
@@ -361,6 +401,9 @@ local function attach(rig: Rig)
 		hipWrote = nil,
 		camLift = 0,
 		floorY = nil,
+		rootAbove = nil,
+		lift = nil,
+		liftUntil = 0,
 		params = params,
 	}
 	poses[rig] = p
@@ -374,6 +417,11 @@ local function attach(rig: Rig)
 	if rig.isLocal then
 		rig.trove:add(State.on("SlideEnd", function(_, reason)
 			p.outTime = if reason == "jump" then BLEND_OUT_JUMP else BLEND_OUT
+			if reason == "jump" then
+				p.lift = liftFor(p)
+				p.liftUntil = os.clock() + LIFT_WINDOW
+			end
+			p.rootAbove = nil
 		end))
 	end
 	rig.trove:add(function()

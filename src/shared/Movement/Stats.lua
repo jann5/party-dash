@@ -38,6 +38,7 @@ Stats.SLIDE_TOLERANCE = 0.15
 Stats.SLIDE_WINDOW_GRACE = 0.05 -- Forgive: a sample this soon after SlideEndAt still counts as sliding
 Stats.CAMERA_MIN_ZOOM = 6
 Stats.CAMERA_MAX_ZOOM = 45
+Stats.CAMERA_START_ZOOM = 18 -- GAME_DESIGN 4: the camera starts this far behind the character
 
 Stats.RAINBOW = ColorSequence.new({
 	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 70, 70)),
@@ -78,8 +79,10 @@ function Stats.dashDistance(player: Player): number
 	return Config.DASH_DISTANCE * math.max(0.2, multiplier(player, "DashDistance"))
 end
 
+-- Humanoid.JumpPower is a 32-bit float: the value is snapped to 1/256 so what the server writes reads back exactly.
 function Stats.jumpPower(player: Player): number
-	return Config.JUMP_POWER * math.max(0.2, multiplier(player, "JumpBoost"))
+	local power = Config.JUMP_POWER * math.max(0.2, multiplier(player, "JumpBoost"))
+	return math.floor(power * 256 + 0.5) / 256
 end
 
 -- Seconds between the END of one slide and the start of the next (no bar anywhere, brief #11).

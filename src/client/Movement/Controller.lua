@@ -7,6 +7,8 @@
 --          out over Config.SLIDE_DURATION, a little steering, ends on time / jump (long jump) / leaving the ground /
 --          hitting a wall / dash. Cooldown Config.SLIDE_COOLDOWN after it ends, no bar anywhere.
 --   A dash or slide pressed up to Stats.INPUT_BUFFER early still fires; anything else is ignored.
+-- Controller.requestDash() / requestSlide() are the same as pressing the key. Called on a copy of this module
+-- required from another context (a test, the command bar) they are forwarded to the running controller.
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -56,6 +58,7 @@ local TAIL_PULL_BACK = -0.3 -- MoveDirection . tail direction below this cancels
 
 local MOVER_ACCEL = 9000 -- MaxForce = AssemblyMass * this (snappy without tunnelling through thin walls)
 local ACTION_PRIORITY = Enum.ContextActionPriority.High.Value + 50
+local BRIDGE_NAME = "ControllerBridge"
 
 local BLOCKING_STATES = {
 	[Enum.HumanoidStateType.Dead] = true,
@@ -107,9 +110,22 @@ local tail = {
 local slideBufferedUntil = 0
 local dashBufferedUntil = 0
 local dashReadyAnnounced = true
+local live = false -- this copy is the running controller (Controller.start ran)
 
 local function serverNow(): number
 	return workspace:GetServerTimeNow()
+end
+
+-- A copy that is not running hands the request to the one that is.
+local function forwarded(action: string): boolean
+	if live then
+		return false
+	end
+	local bridge = script:FindFirstChild(BRIDGE_NAME)
+	if bridge and bridge:IsA("BindableEvent") then
+		bridge:Fire(action)
+	end
+	return true
 end
 
 local function flat(v: Vector3): Vector3?
@@ -319,14 +335,17 @@ local function stepDash(rig: Rig, dt: number)
 end
 
 function Controller.requestDash()
+	if forwarded("dash") then
+		return
+	end
 	local rig = current
 	if not rig or not canAct(rig) or dash.active then
 		return
 	end
 	local now = os.clock()
-	local wait = State.dashReadyAt - now
-	if wait > 0 then
-		if wait <= Stats.INPUT_BUFFER then
+	local remaining = State.dashReadyAt - now
+	if remaining > 0 then
+		if remaining <= Stats.INPUT_BUFFER then
 			dashBufferedUntil = State.dashReadyAt + 0.05
 		else
 			State.fire("DashDenied")
@@ -435,16 +454,19 @@ local function stepSlide(rig: Rig, dt: number)
 end
 
 function Controller.requestSlide()
+	if forwarded("slide") then
+		return
+	end
 	local rig = current
 	if not rig or not canAct(rig) or slide.active then
 		return
 	end
 	local now = os.clock()
-	local wait = State.slideReadyAt - now
-	if wait > Stats.INPUT_BUFFER then
+	local remaining = State.slideReadyAt - now
+	if remaining > Stats.INPUT_BUFFER then
 		return -- cooling down: ignored (no bar, no nag)
 	end
-	if wait > 0 or dash.active or not isGrounded(rig) then
+	if remaining > 0 or dash.active or not isGrounded(rig) then
 		-- Remember the press briefly: it fires the moment the slide is ready / the dash ends / we land.
 		slideBufferedUntil = math.max(now + Stats.INPUT_BUFFER, if dash.active then dash.endsAt + 0.05 else 0)
 		return
@@ -591,15 +613,27 @@ local function onAction(actionName: string, inputState: Enum.UserInputState, _: 
 end
 
 function Controller.start()
+	live = true
 	dashRemote = Net.event(Stats.Remote.Dash)
 	slideRemote = Net.event(Stats.Remote.Slide)
+
+	local bridge = Instance.new("BindableEvent")
+	bridge.Name = BRIDGE_NAME
+	bridge.Event:Connect(function(action: any)
+		if action == "dash" then
+			Controller.requestDash()
+		elseif action == "slide" then
+			Controller.requestSlide()
+		end
+	end)
+	bridge.Parent = script
 
 	-- The server tells us when it refused a dash so the dash indicator shows the real wait.
 	dashRemote.OnClientEvent:Connect(function(kind: any, remaining: any)
 		if kind == "Reject" and Stats.isFinite(remaining) then
-			local wait = math.clamp(remaining, 0, Config.DASH_COOLDOWN * 2)
-			State.dashCooldown = math.max(State.dashCooldown, wait)
-			State.dashReadyAt = math.max(State.dashReadyAt, os.clock() + wait)
+			local left = math.clamp(remaining, 0, Config.DASH_COOLDOWN * 2)
+			State.dashCooldown = math.max(State.dashCooldown, left)
+			State.dashReadyAt = math.max(State.dashReadyAt, os.clock() + left)
 			dashReadyAnnounced = false
 		end
 	end)

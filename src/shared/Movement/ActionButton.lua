@@ -46,6 +46,7 @@ local MIN_GAP = 12 -- px between any two buttons (and the jump button)
 local SMALL_SCREEN = 500 -- TouchJump's rule: min(area) <= 500 px is a phone
 local DISC_TRANSPARENCY = 0.35
 local COOLING_TRANSPARENCY = 0.55 -- 45% opacity
+local SHADE_TRANSPARENCY = 0.45 -- the dash recharge fill (ART_BIBLE 8.5: Ink at 0.45)
 local MOVE_ICONS = { Dash = "action_dash", Slide = "action_slide" }
 local SLOT_NAMES = { "Dash", "Slide", "Primary" }
 
@@ -455,7 +456,7 @@ local function buildSlot(name: string, icon: string, label: string?): Refs
 	local shade = K.new("Frame", {
 		Name = "Shade",
 		BackgroundColor3 = Ink,
-		BackgroundTransparency = 0.25,
+		BackgroundTransparency = SHADE_TRANSPARENCY,
 		BorderSizePixel = 0,
 		Size = UDim2.fromScale(1, 0),
 		Visible = false,
