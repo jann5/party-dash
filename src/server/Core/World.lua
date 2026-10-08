@@ -1,227 +1,430 @@
--- Party Dash Core: the world backdrop. A bright tropical sea far below the arena, floating islands,
--- sandy islets and fluffy clouds, so falling (and spectating) always looks cheerful.
--- Everything here is decorative: no collisions, no touches, built once at boot.
+--[[
+Party Dash Core: the world backdrop (docs/v2/ART_BIBLE.md 5). One cartoon sea made of Parts, ten distant voxel
+islands, sea rocks, blocky clouds and two hot-air balloons, all from Shared.Art recipes. Built once at boot.
+
+	World.init()   -- clears Terrain, builds workspace.Sea (9 PD_Water parts) and workspace.Backdrop (decor)
+
+The sea is a 3 x 3 grid of 2048-stud Art.water tiles (top at Config.SEA_LEVEL) centred midway between the lobby and
+the arena. It is not collidable: nobody can swim, you sink through it and Core eliminates or rescues you.
+Layout rules: islands sit 260-700 studs from the sea centre, never within 120 studs of the lobby or arena edges and
+outside the 60-degree view cone from the lobby toward the arena; nothing decorative enters the 70-stud corridor
+between the lobby and the arena (clouds keep to bands north and south of it, so their client drift never crosses it).
+Every Backdrop part is CanCollide / CanQuery / CanTouch false. The World client scrolls the water and drifts clouds.
+]]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Art = require(Shared.Art)
 local Config = require(Shared.Config)
+local Lobby = require(Shared.Maps.Lobby)
 local Theme = require(Shared.Theme)
-local Build = require(script.Parent.Build)
 
 local World = {}
 
 local C = Theme.Colors
-World.SEA_LEVEL = Config.ARENA_CENTER.Y - 62
-World.SEA_HALF_SIZE = 1024
+local V = Vector3.new
 
-local GRASS = Color3.fromRGB(110, 215, 95)
-local GRASS_DARK = Color3.fromRGB(80, 185, 80)
-local DIRT = { Color3.fromRGB(176, 112, 70), Color3.fromRGB(150, 92, 58), Color3.fromRGB(122, 74, 48) }
-local SAND = Color3.fromRGB(255, 226, 150)
-local TRUNK = Color3.fromRGB(140, 90, 55)
+local SEA_Y = Config.SEA_LEVEL
+local LOBBY = Config.LOBBY_CENTER
+local ARENA = Config.ARENA_CENTER
+local SEA_CENTER = V((LOBBY.X + ARENA.X) / 2, SEA_Y, (LOBBY.Z + ARENA.Z) / 2)
+local SEA_TILE = 2048
+local SAND = Lobby.Colors.Sand
 
-local function removeDefaults()
+local CORRIDOR_HALF_WIDTH = 35 -- nothing decorative within this XZ distance of the lobby -> arena segment
+local LOBBY_CLEARANCE = Config.LOBBY_RADIUS + 120
+local ARENA_CLEARANCE = 70 + 120 -- the biggest arena (Bomb Tag 96 x 96 + cliffs) reaches ~70 studs from its centre
+local VIEW_HALF_ANGLE = math.rad(30) -- the arena stays framed by open sea and sky from the lobby
+
+World.SEA_LEVEL = SEA_Y
+World.SEA_CENTER = SEA_CENTER
+
+-- Hand-placed islands (world X/Z of the centre, footprint w x d). The two front pairs frame the view from the spawn
+-- toward the arena just outside the 30-degree cone; the rest ring the lobby's sides and back.
+local ISLANDS = {
+	{ kind = "large", x = 340, z = 60, w = 120, d = 100 },
+	{ kind = "large", x = -400, z = 106, w = 112, d = 96 },
+	{ kind = "large", x = -300, z = -650, w = 104, d = 92 },
+	{ kind = "medium", x = 254, z = -6, w = 60, d = 50 },
+	{ kind = "medium", x = -286, z = 30, w = 56, d = 62 },
+	{ kind = "medium", x = 330, z = -560, w = 66, d = 54 },
+	{ kind = "medium", x = 520, z = -300, w = 52, d = 60 },
+	{ kind = "islet", x = 268, z = -100, w = 28, d = 24 },
+	{ kind = "islet", x = -330, z = -330, w = 26, d = 32 },
+	{ kind = "islet", x = 60, z = -700, w = 30, d = 24 },
+}
+
+-- Sea rocks (world X/Z), clear of the corridor and the islands.
+local ROCKS = { { -150, -120 }, { 160, -200 }, { -180, -480 }, { 200, -430 }, { -440, -150 }, { 440, 160 } }
+
+local BALLOONS = {
+	{ pos = V(-150, SEA_Y + 90, -210), colors = { C.Red, C.Yellow } },
+	{ pos = V(210, SEA_Y + 76, -60), colors = { C.Purple, C.Orange } },
+}
+
+local ISLAND_NAMES = { large = "LargeIsland", medium = "MediumIsland", islet = "Islet" }
+local CLOUD_COUNT = 14
+
+local built = false
+
+-- ===== placement rules ===============================================================================
+
+local function flat(v: Vector3): Vector3
+	return V(v.X, 0, v.Z)
+end
+
+-- XZ distance from p to the lobby -> arena segment.
+local function corridorDistance(p: Vector3): number
+	local a, ab = flat(LOBBY), flat(ARENA - LOBBY)
+	local t = math.clamp((flat(p) - a):Dot(ab) / ab:Dot(ab), 0, 1)
+	return (flat(p) - (a + ab * t)).Magnitude
+end
+
+-- True when a footprint of `radius` around p cuts into the view cone from the lobby toward the arena.
+local function blocksArenaView(p: Vector3, radius: number): boolean
+	local dir = flat(ARENA - LOBBY).Unit
+	local rel = flat(p - LOBBY)
+	local along = rel:Dot(dir)
+	if along <= 0 then
+		return false
+	end
+	local angle = math.atan2((rel - dir * along).Magnitude, along)
+	return angle - math.asin(math.min(1, radius / rel.Magnitude)) < VIEW_HALF_ANGLE
+end
+
+local function islandAllowed(p: Vector3, radius: number): boolean
+	local fromSea = flat(p - SEA_CENTER).Magnitude
+	return fromSea >= 260
+		and fromSea <= 700
+		and flat(p - LOBBY).Magnitude - radius >= LOBBY_CLEARANCE
+		and flat(p - ARENA).Magnitude - radius >= ARENA_CLEARANCE
+		and corridorDistance(p) - radius >= CORRIDOR_HALF_WIDTH
+		and not blocksArenaView(p, radius)
+end
+
+-- ===== voxel island builder ==========================================================================
+
+type Rect = { x0: number, x1: number, z0: number, z1: number }
+
+local function snap(n: number): number
+	return math.floor(n / 2 + 0.5) * 2
+end
+
+local function rect(cx: number, cz: number, w: number, d: number): Rect
+	return { x0 = snap(cx - w / 2), x1 = snap(cx + w / 2), z0 = snap(cz - d / 2), z1 = snap(cz + d / 2) }
+end
+
+local function inset(r: Rect, dx: number, dz: number, shiftX: number, shiftZ: number): Rect
+	return { x0 = r.x0 + dx + shiftX, x1 = r.x1 - dx + shiftX, z0 = r.z0 + dz + shiftZ, z1 = r.z1 - dz + shiftZ }
+end
+
+-- A main rect plus `n` bumps attached to random sides (strictly inside the side's span, so no coplanar faces):
+-- the stair-stepped voxel silhouette of the references instead of a plain rectangle.
+local function blob(main: Rect, n: number, depth: number, rng: Random): { Rect }
+	local rects = { main }
+	local sides = { "n", "s", "e", "w" }
+	for _ = 1, n do
+		local side = table.remove(sides, rng:NextInteger(1, #sides))
+		local alongX = side == "n" or side == "s"
+		local lo, hi = if alongX then main.x0 else main.z0, if alongX then main.x1 else main.z1
+		local span = hi - lo
+		local len = snap(span * rng:NextNumber(0.35, 0.6))
+		local start = snap(lo + 2 + rng:NextNumber(0, math.max(0, span - len - 4)))
+		local finish = math.min(start + len, hi - 2)
+		local dd = snap(depth * rng:NextNumber(0.6, 1))
+		if side == "n" then
+			table.insert(rects, { x0 = start, x1 = finish, z0 = main.z1, z1 = main.z1 + dd })
+		elseif side == "s" then
+			table.insert(rects, { x0 = start, x1 = finish, z0 = main.z0 - dd, z1 = main.z0 })
+		elseif side == "e" then
+			table.insert(rects, { x0 = main.x1, x1 = main.x1 + dd, z0 = start, z1 = finish })
+		else
+			table.insert(rects, { x0 = main.x0 - dd, x1 = main.x0, z0 = start, z1 = finish })
+		end
+	end
+	return rects
+end
+
+local function block(parent: Instance, name: string, r: Rect, y0: number, y1: number, recipe: string, opts: any?)
+	local size = V(r.x1 - r.x0, y1 - y0, r.z1 - r.z0)
+	local pos = V((r.x0 + r.x1) / 2, (y0 + y1) / 2, (r.z0 + r.z1) / 2)
+	return Art.block(parent, name, size, CFrame.new(pos), recipe, opts)
+end
+
+local function grow(r: Rect, by: number): Rect
+	return { x0 = r.x0 - by, x1 = r.x1 + by, z0 = r.z0 - by, z1 = r.z1 + by }
+end
+
+-- Sand beach slabs from just under the water to `top`, with a foam frame at the waterline.
+local function beach(parent: Instance, rects: { Rect }, top: number)
+	for _, r in rects do
+		block(parent, "Beach", r, SEA_Y - 0.5, top, "sand", { color = SAND })
+		Art.foam(parent, V((r.x0 + r.x1) / 2, SEA_Y, (r.z0 + r.z1) / 2), r.x1 - r.x0, r.z1 - r.z0, SEA_Y)
+	end
+end
+
+-- One grass terrace: dark cliff body, 1.5-stud grass lip (overhang 0.3) and the textured grass top.
+local function terrace(parent: Instance, rects: { Rect }, bottom: number, top: number, cliff: string)
+	for _, r in rects do
+		block(parent, "Cliff", r, bottom, top - 1.5, cliff)
+		block(parent, "GrassLip", grow(r, 0.3), top - 1.55, top - 0.05, "grass_lip")
+		block(parent, "Grass", r, top - 0.4, top, "grass_top")
+	end
+end
+
+-- A random grid spot on a rect, `margin` studs inside its edge.
+local function spotOn(r: Rect, margin: number, y: number, rng: Random): Vector3
+	local x = snap(rng:NextNumber(r.x0 + margin, math.max(r.x0 + margin, r.x1 - margin)))
+	local z = snap(rng:NextNumber(r.z0 + margin, math.max(r.z0 + margin, r.z1 - margin)))
+	return V(x, y, z)
+end
+
+local function umbrella(parent: Instance, ground: Vector3)
+	Art.block(parent, "UmbrellaPole", V(0.5, 8, 0.5), CFrame.new(ground + V(0, 4, 0)), "wood")
+	for _, q in { { -2, -2, C.Red }, { 2, 2, C.Red }, { -2, 2, C.White }, { 2, -2, C.White } } do
+		Art.block(parent, "UmbrellaTop", V(4, 0.6, 4), CFrame.new(ground + V(q[1], 8.2, q[2])), "awning", {
+			color = q[3],
+			u = 16,
+			v = 16,
+		})
+	end
+end
+
+-- A spot on the beach ring along the south (side -1) or north (side 1) edge that no terrace covers.
+local function beachSpot(main: Rect, covered: { Rect }, ring: number, side: number, rng: Random): Vector2?
+	for _ = 1, 12 do
+		local x = snap(rng:NextNumber(main.x0 + 4, main.x1 - 4))
+		local z = if side < 0 then main.z0 + ring / 2 else main.z1 - ring / 2
+		local free = true
+		for _, r in covered do
+			if x > r.x0 - 2 and x < r.x1 + 2 and z > r.z0 - 2 and z < r.z1 + 2 then
+				free = false
+				break
+			end
+		end
+		if free then
+			return Vector2.new(x, z)
+		end
+	end
+	return nil
+end
+
+-- Large: blobby beach + 2-3 stepped grass terraces (top 18-30 above the water), 3-5 block trees, 2 palms.
+-- Medium: beach + 1-2 terraces (top 8-16), 1-2 trees and a palm. Islet: a low sand bar, palms and an umbrella.
+local function buildIsland(parent: Instance, spec, rng: Random)
+	local island = Instance.new("Model")
+	island.Name = ISLAND_NAMES[spec.kind]
+	local main = rect(spec.x, spec.z, spec.w, spec.d)
+
+	if spec.kind == "islet" then
+		local top = SEA_Y + rng:NextNumber(2, 3)
+		beach(island, blob(main, 1, 6, rng), top)
+		for _ = 1, rng:NextInteger(1, 2) do
+			Art.palm(island, spotOn(main, 5, top, rng), rng:NextNumber(1.1, 1.4), rng)
+		end
+		umbrella(island, spotOn(main, 5, top, rng))
+		island.Parent = parent
+		return
+	end
+
+	local large = spec.kind == "large"
+	local beachTop = SEA_Y + 2
+	beach(island, blob(main, if large then 3 else 2, if large then 10 else 6, rng), beachTop)
+
+	local heights = if large then { 10, 20, 28 } else { rng:NextInteger(4, 6) * 2, 16 }
+	local tiers = if large then rng:NextInteger(2, 3) else rng:NextInteger(1, 2)
+	local ring = if large then 8 else 5
+	local tier = inset(main, ring, ring, 0, 0)
+	local bottom = beachTop - 1
+	local topRect = tier
+	local topY = beachTop
+	local firstTier: { Rect } = {}
+	for i = 1, tiers do
+		local top = SEA_Y + heights[i]
+		local cliff = if i == 1 then "dirt_cliff_low" else "dirt_cliff"
+		local rects = blob(tier, if i < tiers then 2 else 1, if large then 4 else 3, rng)
+		terrace(island, rects, bottom, top, cliff)
+		if i == 1 then
+			firstTier = rects
+		end
+		topRect, topY = tier, top
+		local nextTier = inset(
+			tier,
+			if large then 12 else 8,
+			if large then 11 else 7,
+			snap(rng:NextNumber(-4, 4)),
+			snap(rng:NextNumber(-4, 4))
+		)
+		if i == tiers or nextTier.x1 - nextTier.x0 < 14 or nextTier.z1 - nextTier.z0 < 14 then
+			break
+		end
+		bottom = top - 1.6
+		tier = nextTier
+	end
+
+	-- block trees on the top terrace, palms on the beach ring, a rock or two in the shallows
+	for _ = 1, if large then rng:NextInteger(3, 5) else rng:NextInteger(1, 2) do
+		Art.tree(island, spotOn(topRect, 5, topY, rng), rng:NextNumber(1, 1.4), rng)
+	end
+	for k = 1, if large then 2 else 1 do
+		local spot = beachSpot(main, firstTier, ring, if k == 1 then -1 else 1, rng)
+		if spot then
+			Art.palm(island, V(spot.X, beachTop, spot.Y), 1.3, rng)
+		end
+	end
+	if large then
+		for _ = 1, 2 do
+			local a = rng:NextNumber(0, 2 * math.pi)
+			local r = math.max(spec.w, spec.d) / 2 + rng:NextNumber(10, 20)
+			Art.rock(
+				island,
+				V(spec.x + math.cos(a) * r, SEA_Y, spec.z + math.sin(a) * r),
+				rng:NextNumber(0.8, 1.2),
+				rng
+			)
+		end
+	end
+	island.Parent = parent
+end
+
+-- Blocky hot-air balloon: banded voxel envelope, ropes and a wood basket.
+local function buildBalloon(parent: Instance, center: Vector3, colors: { Color3 })
+	local balloon = Instance.new("Model")
+	balloon.Name = "HotAirBalloon"
+	local layers = { { -9, 8, 3 }, { -6, 14, 3 }, { -2.5, 18, 4 }, { 1.5, 18, 4 }, { 5, 14, 3 }, { 7.5, 8, 2 } }
+	for i, layer in layers do
+		local y, size, h = layer[1], layer[2], layer[3]
+		Art.block(balloon, "Envelope", V(size, h, size), CFrame.new(center + V(0, y, 0)), "plain", {
+			color = colors[(i - 1) % #colors + 1],
+		})
+	end
+	Art.block(balloon, "Mouth", V(4, 1, 4), CFrame.new(center + V(0, -11, 0)), "plain", { color = C.InkSoft })
+	for _, cx in { -1.8, 1.8 } do
+		for _, cz in { -1.8, 1.8 } do
+			Art.block(balloon, "Rope", V(0.2, 7, 0.2), CFrame.new(center + V(cx, -14.5, cz)), "plain", {
+				color = Theme.World.WoodDark,
+			})
+		end
+	end
+	Art.block(balloon, "Basket", V(5, 4, 5), CFrame.new(center + V(0, -20, 0)), "wood")
+	balloon.Parent = parent
+end
+
+-- Cloud spots: 350-900 studs from the sea centre, in two bands north and south of the lobby -> arena corridor so
+-- the client-side +X drift (wrapping at +-1000) never carries a cloud over it.
+local function cloudSpots(rng: Random): { Vector3 }
+	local spots = {}
+	local tries = 0
+	while #spots < CLOUD_COUNT and tries < 1000 do
+		tries += 1
+		local side = if #spots % 2 == 0 then 1 else -1
+		local x = rng:NextNumber(-850, 850)
+		local z = side * rng:NextNumber(270, 720)
+		local d = math.sqrt(x * x + z * z)
+		if d >= 350 and d <= 900 then
+			table.insert(spots, SEA_CENTER + V(x, rng:NextNumber(110, 190), z))
+		end
+	end
+	return spots
+end
+
+-- ===== build =========================================================================================
+
+local function buildSea()
+	local sea = Instance.new("Folder")
+	sea.Name = "Sea"
+	for ix = -1, 1 do
+		for iz = -1, 1 do
+			Art.water(sea, SEA_CENTER + V(ix * SEA_TILE, 0, iz * SEA_TILE), Vector2.new(SEA_TILE, SEA_TILE))
+		end
+	end
+	sea.Parent = workspace
+end
+
+local function buildBackdrop()
+	local backdrop = Instance.new("Folder")
+	backdrop.Name = "Backdrop"
+	local rng = Random.new(20261007)
+
+	local islands = Instance.new("Folder")
+	islands.Name = "Islands"
+	for _, spec in ISLANDS do
+		local radius = math.sqrt(spec.w * spec.w + spec.d * spec.d) / 2 + 10 -- + the blob bumps
+		if islandAllowed(V(spec.x, SEA_Y, spec.z), radius) then
+			buildIsland(islands, spec, rng)
+		else
+			warn(
+				("[World] skipped the %s island at (%d, %d): it breaks the layout rules"):format(
+					spec.kind,
+					spec.x,
+					spec.z
+				)
+			)
+		end
+	end
+	islands.Parent = backdrop
+
+	local rocks = Instance.new("Folder")
+	rocks.Name = "Rocks"
+	for _, p in ROCKS do
+		Art.rock(rocks, V(p[1], SEA_Y, p[2]), rng:NextNumber(1, 1.5), rng)
+	end
+	rocks.Parent = backdrop
+
+	local clouds = Instance.new("Folder")
+	clouds.Name = "Clouds"
+	for _, pos in cloudSpots(rng) do
+		local cloud = Art.cloud(clouds, pos, rng:NextNumber(1.1, 1.7), rng)
+		cloud.WorldPivot = CFrame.new(pos) -- a meaningful pivot: the client drifts clouds with PivotTo
+	end
+	clouds.Parent = backdrop
+
+	for _, spec in BALLOONS do
+		buildBalloon(backdrop, spec.pos, spec.colors)
+	end
+
+	-- Purely decorative: never collide, block raycasts or fire touches (Art helpers default some to true).
+	for _, d in backdrop:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.CanCollide = false
+			d.CanQuery = false
+			d.CanTouch = false
+		end
+	end
+	backdrop.Parent = workspace
+end
+
+local function clearPlace()
 	local baseplate = workspace:FindFirstChild("Baseplate")
 	if baseplate then
 		baseplate:Destroy()
 	end
-	-- Loose default spawn pads would float in the sky without the baseplate; Core spawns people itself.
+	-- loose engine spawn pads would float over the sea; the lobby carries its own SpawnLocation
 	for _, child in workspace:GetChildren() do
-		if child:IsA("SpawnLocation") then
+		if child:IsA("SpawnLocation") or child.Name == "Sea" or child.Name == "Backdrop" then
 			child:Destroy()
 		end
 	end
-end
-
-local function buildSea()
 	local terrain = workspace.Terrain
-	terrain.WaterColor = Color3.fromRGB(35, 200, 235)
-	terrain.WaterTransparency = 0.25
-	terrain.WaterReflectance = 0.6
-	terrain.WaterWaveSize = 0.18
-	terrain.WaterWaveSpeed = 14
-	local depth = 16
-	local tile = 512
-	local half = World.SEA_HALF_SIZE
-	local y = World.SEA_LEVEL - depth / 2
-	for x = -half + tile / 2, half - tile / 2, tile do
-		for z = -half + tile / 2, half - tile / 2, tile do
-			local center = Vector3.new(Config.ARENA_CENTER.X + x, y, Config.ARENA_CENTER.Z + z)
-			terrain:FillBlock(CFrame.new(center), Vector3.new(tile, depth, tile), Enum.Material.Water)
-		end
+	terrain:Clear() -- no terrain water: the sea is Parts
+	-- Terrain is also a BasePart; hide its (now empty) proxy box from part-based tools such as the scene exporter.
+	pcall(function()
+		terrain.Transparency = 1
+	end)
+	local terrainClouds = terrain:FindFirstChildOfClass("Clouds")
+	if terrainClouds then
+		terrainClouds:Destroy()
 	end
-end
-
-local function tree(parent: Instance, groundPos: Vector3, scale: number, rng: Random)
-	local h = 7 * scale
-	Build.pillar(parent, "Trunk", groundPos + Vector3.new(0, h / 2, 0), h, 0.7 * scale, TRUNK)
-	local top = groundPos + Vector3.new(0, h, 0)
-	Build.ball(parent, "Leaves", top, 6 * scale, if rng:NextNumber() < 0.5 then GRASS else GRASS_DARK)
-	Build.ball(parent, "Leaves", top + Vector3.new(2 * scale, -1 * scale, 0.8 * scale), 4.5 * scale, GRASS)
-	Build.ball(parent, "Leaves", top + Vector3.new(-1.8 * scale, -0.8 * scale, -1 * scale), 4.2 * scale, GRASS_DARK)
-end
-
-local function palm(parent: Instance, groundPos: Vector3, scale: number)
-	local segments = 5
-	local pos = groundPos
-	for i = 1, segments do
-		local nextPos = pos + Vector3.new(0.5 * scale, 2 * scale, 0)
-		Build.part({
-			Name = "Trunk",
-			Size = Vector3.new(1.1 * scale, 1.1 * scale, 2.3 * scale),
-			CFrame = CFrame.lookAt((pos + nextPos) / 2, nextPos),
-			Color = if i % 2 == 0 then TRUNK else Color3.fromRGB(165, 112, 70),
-			Parent = parent,
-		})
-		pos = nextPos
-	end
-	for i = 0, 4 do
-		local angle = i * math.pi * 2 / 5
-		local dir = Vector3.new(math.cos(angle), 0, math.sin(angle))
-		local leafCenter = pos + dir * 2.6 * scale - Vector3.new(0, 0.6 * scale, 0)
-		Build.ellipsoid(
-			parent,
-			"Leaf",
-			CFrame.lookAt(leafCenter, leafCenter + dir) * CFrame.Angles(math.rad(-18), 0, 0),
-			Vector3.new(1.6 * scale, 0.4 * scale, 5.5 * scale),
-			GRASS
-		)
-	end
-	Build.ball(parent, "Coconut", pos - Vector3.new(0, 0.6 * scale, 0), 1.1 * scale, TRUNK)
-end
-
--- Floating island: grass top with layered dirt underneath and a few trees.
-local function floatingIsland(parent: Instance, top: Vector3, radius: number, rng: Random)
-	local m = Instance.new("Model")
-	m.Name = "FloatingIsland"
-	Build.disc(m, "Grass", top, 2.5, radius, GRASS)
-	local r = radius * 0.96
-	local y = top.Y - 2.5
-	for i, color in DIRT do
-		local h = radius * (0.32 - i * 0.04)
-		Build.disc(m, "Dirt", Vector3.new(top.X, y, top.Z), h, r, color)
-		y -= h
-		r *= 0.68
-	end
-	Build.disc(m, "Tip", Vector3.new(top.X, y, top.Z), radius * 0.2, r * 0.6, DIRT[3])
-	local trees = rng:NextInteger(1, 3)
-	for _ = 1, trees do
-		local a = rng:NextNumber(0, math.pi * 2)
-		local d = rng:NextNumber(0, radius * 0.55)
-		tree(m, top + Vector3.new(math.cos(a) * d, 0, math.sin(a) * d), rng:NextNumber(0.8, 1.4) * radius / 14, rng)
-	end
-	if rng:NextNumber() < 0.6 then
-		local a = rng:NextNumber(0, math.pi * 2)
-		local flowerPos = top + Vector3.new(math.cos(a), 0, math.sin(a)) * radius * 0.7
-		local colors = { C.Pink, C.Yellow, C.Purple, C.Red }
-		Build.ball(m, "Flower", flowerPos + Vector3.new(0, 0.6, 0), 1.6, colors[rng:NextInteger(1, #colors)])
-	end
-	m.Parent = parent
-end
-
--- Sandy islet sitting on the sea with a palm tree or two.
-local function islet(parent: Instance, center: Vector3, radius: number, rng: Random)
-	local m = Instance.new("Model")
-	m.Name = "Islet"
-	local top = Vector3.new(center.X, World.SEA_LEVEL + 2.5, center.Z)
-	Build.disc(m, "Sand", top, 8, radius, SAND)
-	Build.disc(m, "Shore", top - Vector3.new(0, 1.8, 0), 4, radius * 1.15, Color3.fromRGB(255, 240, 200))
-	Build.disc(m, "Grass", top + Vector3.new(0, 0.6, 0), 0.8, radius * 0.55, GRASS)
-	for _ = 1, rng:NextInteger(1, 2) do
-		local a = rng:NextNumber(0, math.pi * 2)
-		palm(m, top + Vector3.new(0, 0.6, 0) + Vector3.new(math.cos(a), 0, math.sin(a)) * radius * 0.3, radius / 9)
-	end
-	m.Parent = parent
-end
-
-local function hotAirBalloon(parent: Instance, center: Vector3, color: Color3, trim: Color3)
-	local m = Instance.new("Model")
-	m.Name = "HotAirBalloon"
-	Build.ellipsoid(m, "Envelope", CFrame.new(center), Vector3.new(22, 26, 22), color)
-	Build.ellipsoid(m, "Band", CFrame.new(center), Vector3.new(22.4, 6, 22.4), trim)
-	Build.pillar(m, "Mouth", center - Vector3.new(0, 13, 0), 3, 4, trim)
-	Build.part({
-		Name = "Basket",
-		Size = Vector3.new(6, 4, 6),
-		CFrame = CFrame.new(center - Vector3.new(0, 22, 0)),
-		Color = TRUNK,
-		Material = Enum.Material.WoodPlanks,
-		Parent = m,
-	})
-	for _, corner in
-		{ Vector3.new(2.6, 0, 2.6), Vector3.new(-2.6, 0, 2.6), Vector3.new(2.6, 0, -2.6), Vector3.new(-2.6, 0, -2.6) }
-	do
-		local from = center - Vector3.new(0, 20, 0) + corner
-		local to = center - Vector3.new(0, 13.5, 0) + corner * 0.9
-		Build.part({
-			Name = "Rope",
-			Size = Vector3.new(0.2, 0.2, (to - from).Magnitude),
-			CFrame = CFrame.lookAt((from + to) / 2, to),
-			Color = Color3.fromRGB(90, 60, 40),
-			Parent = m,
-		})
-	end
-	m.Parent = parent
 end
 
 function World.init()
-	removeDefaults()
+	if built then
+		return
+	end
+	built = true
+	clearPlace()
 	buildSea()
-
-	local folder = Instance.new("Folder")
-	folder.Name = "Backdrop"
-	local rng = Random.new(20261006)
-	local center = Config.ARENA_CENTER
-
-	-- Floating islands around the arena (most of them in the background the cameras face).
-	local islands = {
-		{ angle = 70, dist = 230, height = 35, radius = 22 },
-		{ angle = 100, dist = 330, height = 70, radius = 30 },
-		{ angle = 125, dist = 250, height = 10, radius = 16 },
-		{ angle = 45, dist = 380, height = 95, radius = 34 },
-		{ angle = 150, dist = 420, height = 55, radius = 26 },
-		{ angle = 15, dist = 300, height = 20, radius = 18 },
-		{ angle = 175, dist = 300, height = 85, radius = 20 },
-		{ angle = 5, dist = 450, height = 60, radius = 28 },
-		{ angle = 205, dist = 340, height = 30, radius = 22 },
-		{ angle = 330, dist = 360, height = 40, radius = 24 },
-	}
-	for _, info in islands do
-		local a = math.rad(info.angle)
-		local pos = center + Vector3.new(math.cos(a) * info.dist, info.height, math.sin(a) * info.dist)
-		floatingIsland(folder, pos, info.radius, rng)
-	end
-
-	-- Sandy islets on the sea.
-	for i = 1, 9 do
-		local a = rng:NextNumber(0, math.pi * 2)
-		local d = rng:NextNumber(160, 520)
-		islet(folder, center + Vector3.new(math.cos(a) * d, 0, math.sin(a) * d), rng:NextNumber(12, 26), rng)
-		if i % 3 == 0 then
-			task.wait() -- spread the build over a few frames
-		end
-	end
-
-	-- Clouds: a high layer plus a soft layer between the arena and the sea (seen while falling).
-	for _ = 1, 16 do
-		local a = rng:NextNumber(0, math.pi * 2)
-		local d = rng:NextNumber(180, 600)
-		local h = rng:NextNumber(60, 170)
-		Build.cloud(folder, center + Vector3.new(math.cos(a) * d, h, math.sin(a) * d), rng:NextNumber(14, 30), rng)
-	end
-	for _ = 1, 12 do
-		local a = rng:NextNumber(0, math.pi * 2)
-		local d = rng:NextNumber(90, 300)
-		local h = rng:NextNumber(-45, -25)
-		Build.cloud(folder, center + Vector3.new(math.cos(a) * d, h, math.sin(a) * d), rng:NextNumber(10, 20), rng)
-	end
-
-	hotAirBalloon(folder, center + Vector3.new(-160, 70, 210), C.Red, C.Yellow)
-	hotAirBalloon(folder, center + Vector3.new(190, 105, 300), C.Cyan, C.Pink)
-	hotAirBalloon(folder, center + Vector3.new(-280, 40, -60), C.Purple, C.Green)
-
-	Build.decorative(folder)
-	folder.Parent = workspace
+	buildBackdrop()
 end
 
 return World
